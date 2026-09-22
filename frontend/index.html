@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RefCanton — Private Atomic Refinancing on Canton Network</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Top Navigation Bar -->
+  <header class="navbar">
+    <div class="nav-left">
+      <div class="logo-group">
+        <div class="logo-badge">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+          </svg>
+        </div>
+        <div>
+          <h1 class="logo-title">RefCanton</h1>
+          <span class="logo-subtitle">Private Atomic Debt Refinancing</span>
+        </div>
+      </div>
+      <div class="network-tag" id="networkStatusBadge">
+        <span class="status-dot pulse"></span>
+        <span id="networkText">Canton LocalNet (Daml 3.4.11)</span>
+      </div>
+    </div>
+
+    <!-- Role Switcher -->
+    <div class="role-selector">
+      <span class="role-label">Active Role:</span>
+      <div class="role-tabs">
+        <button class="role-btn active" id="roleBtnBorrower" onclick="setRole('Borrower')">
+          <span class="role-icon">👤</span> Borrower (Alice)
+        </button>
+        <button class="role-btn" id="roleBtnLenderA" onclick="setRole('LenderA')">
+          <span class="role-icon">🏦</span> Outgoing (Lender A)
+        </button>
+        <button class="role-btn" id="roleBtnLenderB" onclick="setRole('LenderB')">
+          <span class="role-icon">⚡</span> Incoming (Lender B)
+        </button>
+      </div>
+    </div>
+
+    <div class="nav-right">
+      <button class="btn btn-outline" id="privacyAuditBtn" onclick="togglePrivacyInspector()">
+        🛡️ Privacy Inspector
+      </button>
+      <button class="btn btn-outline" id="viewTxBtn" onclick="toggleTxModal()">
+        📜 Audit Log
+      </button>
+      <button class="btn btn-ghost" id="resetLedgerBtn" onclick="resetLedger()" title="Reset Demo to Initial State">
+        🔄 Reset
+      </button>
+    </div>
+  </header>
+
+  <!-- Notification Toast Container -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- Main Container -->
+  <main class="main-content">
+
+    <!-- Role Context Banner -->
+    <section class="context-banner" id="contextBanner">
+      <div class="banner-content">
+        <div class="banner-badge" id="bannerBadge">Role: Borrower</div>
+        <p class="banner-desc" id="bannerDesc">
+          You are refinancing your <strong>$101,000</strong> loan from Lender A with incoming funds from Lender B (<strong>$100,000</strong>) and your <strong>$1,000</strong> equity contribution.
+        </p>
+      </div>
+      <div class="banner-stat-chips" id="bannerStatChips">
+        <!-- Dynamically injected -->
+      </div>
+    </section>
+
+    <!-- Role View: BORROWER -->
+    <section id="viewBorrower" class="role-view active-view">
+      
+      <!-- Metrics Overview -->
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-title">Current Debt (Loan A)</span>
+            <span class="tag tag-amber" id="loanAStatusBadge">Active Secured</span>
+          </div>
+          <div class="metric-value" id="bLoanAAmount">$101,000.00</div>
+          <div class="metric-sub" id="bLoanADetails">8.5% Bullet Rate · Matures Jun 2027</div>
+        </div>
+
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-title">Locked Collateral</span>
+            <span class="tag tag-indigo" id="bCollatStatusBadge">Locked to A</span>
+          </div>
+          <div class="metric-value" id="bCollatUnits">150.00 Units</div>
+          <div class="metric-sub" id="bCollatDetails">COLLAT-TEST · Enforced Canton Lock</div>
+        </div>
+
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-title">Available Cash</span>
+            <span class="tag tag-emerald">Liquid Funds</span>
+          </div>
+          <div class="metric-value" id="bCashAmount">$5,000.00</div>
+          <div class="metric-sub">USD-TEST ($1,000 needed for closing equity)</div>
+        </div>
+
+        <div class="metric-card highlight-card">
+          <div class="metric-header">
+            <span class="metric-title">Refinanced Position</span>
+            <span class="tag tag-purple" id="refinanceSavingsTag">New Terms Ready</span>
+          </div>
+          <div class="metric-value" id="bNewDebtAmount">$100,000.00</div>
+          <div class="metric-sub" id="bSavingsSub">7.5% Cap Rate (Saves 1.0% + Amortizing)</div>
+        </div>
+      </div>
+
+      <!-- Refinancing Lifecycle Pipeline -->
+      <div class="pipeline-section">
+        <div class="section-title-row">
+          <div>
+            <h2 class="section-title">Atomic Refinancing Orchestration</h2>
+            <p class="section-subtitle">A borrower replaces an existing lender using incoming funds in one atomic committed transaction.</p>
+          </div>
+          <div id="pipelineStatusTag" class="tag tag-cyan">Awaiting Approvals</div>
+        </div>
+
+        <div class="pipeline-grid">
+          <!-- Step 1: Outgoing Payoff Quote -->
+          <div class="pipeline-card" id="cardStep1">
+            <div class="step-num">1</div>
+            <div class="pipeline-card-body">
+              <div class="step-title-row">
+                <h3 class="step-title">Outgoing Payoff Quote</h3>
+                <span class="step-badge" id="step1Badge">Pending Lender A</span>
+              </div>
+              <p class="step-desc">Lender A's binding payoff commitment pinning exact loan state, $101,000 payoff, and expiry.</p>
+              <div class="approval-box" id="quoteDetailsBox">
+                <div class="empty-state-text">Waiting for Lender A to issue PayoffQuote...</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 2: Incoming Replacement Offer -->
+          <div class="pipeline-card" id="cardStep2">
+            <div class="step-num">2</div>
+            <div class="pipeline-card-body">
+              <div class="step-title-row">
+                <h3 class="step-title">Incoming Replacement Offer</h3>
+                <span class="step-badge" id="step2Badge">Pending Lender B</span>
+              </div>
+              <p class="step-desc">Lender B's binding funding offer pinning $100k principal, 7.5% cap-rate, and 150 collateral pledge.</p>
+              <div class="approval-box" id="offerDetailsBox">
+                <div class="empty-state-text">Waiting for Lender B to issue ReplacementOffer...</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 3: Atomic Closing Execution -->
+          <div class="pipeline-card execution-card" id="cardStep3">
+            <div class="step-num">3</div>
+            <div class="pipeline-card-body">
+              <div class="step-title-row">
+                <h3 class="step-title">One Committed Ledger Update</h3>
+                <span class="step-badge" id="step3Badge">Locked</span>
+              </div>
+              <p class="step-desc">Atomic swap: Pays A $101,000, closes Loan A, repledges collateral A→B, creates Loan B.</p>
+              
+              <div class="settlement-breakdown" id="settlementBreakdownBox">
+                <div class="breakdown-row">
+                  <span>Incoming Lender B Funds:</span>
+                  <strong class="text-emerald">+$100,000.00</strong>
+                </div>
+                <div class="breakdown-row">
+                  <span>Borrower Cash Contribution:</span>
+                  <strong class="text-emerald">+$1,000.00</strong>
+                </div>
+                <div class="breakdown-divider"></div>
+                <div class="breakdown-row total-row">
+                  <span>Total Paid to Outgoing Lender A:</span>
+                  <strong class="text-amber">$101,000.00</strong>
+                </div>
+              </div>
+
+              <div class="action-buttons-group">
+                <button class="btn btn-primary btn-lg" id="btnRequestClose" onclick="requestAndExecuteClose()" disabled>
+                  ⚡ Execute Atomic Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Receipt / Post-Closing Card (hidden until closed) -->
+      <div class="receipt-section" id="borrowerReceiptSection" style="display: none;">
+        <div class="receipt-card">
+          <div class="receipt-header">
+            <div class="receipt-icon">✓</div>
+            <div>
+              <h3 class="receipt-title">Refinancing Successfully Closed</h3>
+              <p class="receipt-subtitle">Committed to Canton Network Ledger in a single atomic transaction.</p>
+            </div>
+          </div>
+          <div class="receipt-grid" id="receiptDetailsGrid">
+            <!-- Injected dynamically -->
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- Role View: OUTGOING LENDER A -->
+    <section id="viewLenderA" class="role-view">
+      <div class="role-header-banner">
+        <div>
+          <h2 class="role-view-title">Lender A — Outgoing Institutional Creditor</h2>
+          <p class="role-view-desc">Monitor historical bullet loan, issue binding payoff quotes, and track payoff settlement.</p>
+        </div>
+        <div class="privacy-pill">
+          🔒 Sub-Transaction Privacy Active: Cannot see Lender B's cap rate or new terms
+        </div>
+      </div>
+
+      <div class="two-col-grid">
+        <!-- Loan A Management -->
+        <div class="panel-card">
+          <h3 class="panel-title">Active Loan A Portfolio</h3>
+          <div class="loan-status-panel" id="lenderALoanPanel">
+            <!-- Dynamic Loan A Details -->
+          </div>
+
+          <div class="action-box">
+            <h4 class="action-box-title">Issue Binding Payoff Quote</h4>
+            <p class="action-box-desc">Locks required payoff amount and account destination. Expires in 48 hours.</p>
+            <div class="input-form">
+              <div class="form-group">
+                <label>Payoff Amount (USD-TEST)</label>
+                <input type="number" id="inputPayoffAmount" value="101000" step="1000" />
+              </div>
+              <button class="btn btn-primary" id="btnIssueQuote" onclick="issuePayoffQuote()">
+                📄 Issue Payoff Quote ($101,000)
+              </button>
+              <button class="btn btn-danger" id="btnWithdrawQuote" onclick="withdrawPayoffQuote()" style="display: none;">
+                ✕ Revoke Quote
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Privacy & Ledger Audit -->
+        <div class="panel-card">
+          <h3 class="panel-title">Lender A — Ledger Visibility & Privacy Audit</h3>
+          <p class="panel-desc">Canton ensures that Outgoing Lender A only observes what is necessary to verify payoff satisfaction.</p>
+          
+          <div class="audit-list">
+            <div class="audit-item audit-allow">
+              <span class="audit-icon">✓</span>
+              <div>
+                <strong>Loan A Terms & Principal:</strong>
+                <span>Visible ($101,000 at 8.5% bullet rate)</span>
+              </div>
+            </div>
+            <div class="audit-item audit-allow">
+              <span class="audit-icon">✓</span>
+              <div>
+                <strong>Payoff Settlement:</strong>
+                <span>Visible ($101,000 received in CashHolding)</span>
+              </div>
+            </div>
+            <div class="audit-item audit-deny">
+              <span class="audit-icon">✕</span>
+              <div>
+                <strong>Lender B Cap-Rate:</strong>
+                <span class="text-red">BLOCKED BY CANTON PRIVACY ENGINE</span>
+              </div>
+            </div>
+            <div class="audit-item audit-deny">
+              <span class="audit-icon">✕</span>
+              <div>
+                <strong>Loan B Contract & Amortization:</strong>
+                <span class="text-red">BLOCKED BY CANTON PRIVACY ENGINE</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="cash-balance-display">
+            <span>Lender A Cash Balance:</span>
+            <strong id="lenderACashDisplay">$0.00 USD-TEST</strong>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Role View: INCOMING LENDER B -->
+    <section id="viewLenderB" class="role-view">
+      <div class="role-header-banner">
+        <div>
+          <h2 class="role-view-title">Lender B — Incoming Capital Provider</h2>
+          <p class="role-view-desc">Structure replacement loan facility, allocate deployable cash, and secure collateral pledge.</p>
+        </div>
+        <div class="privacy-pill">
+          🔒 Sub-Transaction Privacy Active: Cannot see Lender A's historical interest rate
+        </div>
+      </div>
+
+      <div class="two-col-grid">
+        <!-- Loan B Structuring & Funding -->
+        <div class="panel-card">
+          <h3 class="panel-title">Structure Replacement Loan Offer</h3>
+          <div class="loan-status-panel" id="lenderBLoanPanel">
+            <!-- Dynamic Loan B Details -->
+          </div>
+
+          <div class="action-box">
+            <h4 class="action-box-title">Commit Funds & Issue Offer</h4>
+            <p class="action-box-desc">Allocates $100,000 USD-TEST for refinancing and pins commercial terms.</p>
+            <div class="input-form">
+              <div class="form-row">
+                <div class="form-group">
+                  <label>New Principal (USD-TEST)</label>
+                  <input type="number" id="inputNewPrincipal" value="100000" readonly />
+                </div>
+                <div class="form-group">
+                  <label>Private Cap-Rate (%)</label>
+                  <input type="number" id="inputCapRate" value="7.5" step="0.1" />
+                </div>
+              </div>
+              <div class="form-group">
+                <label>Amortization (Months)</label>
+                <input type="number" id="inputAmortization" value="24" />
+              </div>
+              <button class="btn btn-primary" id="btnIssueOffer" onclick="issueReplacementOffer()">
+                ⚡ Allocate $100k & Issue Offer
+              </button>
+              <button class="btn btn-danger" id="btnWithdrawOffer" onclick="withdrawReplacementOffer()" style="display: none;">
+                ✕ Withdraw Offer & Deallocate
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Privacy & Ledger Audit -->
+        <div class="panel-card">
+          <h3 class="panel-title">Lender B — Ledger Visibility & Privacy Audit</h3>
+          <p class="panel-desc">Canton ensures that Incoming Lender B only observes its own new contract and the collateral pledge.</p>
+          
+          <div class="audit-list">
+            <div class="audit-item audit-allow">
+              <span class="audit-icon">✓</span>
+              <div>
+                <strong>Loan B Terms & Rate:</strong>
+                <span>Visible ($100,000 at 7.5% cap-rate, 24 periods)</span>
+              </div>
+            </div>
+            <div class="audit-item audit-allow">
+              <span class="audit-icon">✓</span>
+              <div>
+                <strong>Collateral Security:</strong>
+                <span>Visible (150 units locked to Lender B post-close)</span>
+              </div>
+            </div>
+            <div class="audit-item audit-deny">
+              <span class="audit-icon">✕</span>
+              <div>
+                <strong>Lender A Historical Rate:</strong>
+                <span class="text-red">BLOCKED BY CANTON PRIVACY ENGINE</span>
+              </div>
+            </div>
+            <div class="audit-item audit-deny">
+              <span class="audit-icon">✕</span>
+              <div>
+                <strong>Lender A Loan A Contract:</strong>
+                <span class="text-red">BLOCKED BY CANTON PRIVACY ENGINE</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="cash-balance-display">
+            <span>Lender B Available Cash:</span>
+            <strong id="lenderBCashDisplay">$100,000.00 USD-TEST</strong>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Privacy Inspector Modal -->
+  <div class="modal-backdrop" id="privacyModal" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title">🛡️ Canton Sub-Transaction Privacy Inspector</h3>
+        <button class="modal-close-btn" onclick="togglePrivacyInspector()">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">
+          Compare in real-time what each party can see on the Canton ledger. Canton's sub-transaction privacy guarantees that commercial terms are structurally isolated between competing lenders.
+        </p>
+
+        <div class="privacy-matrix-grid">
+          <div class="matrix-card">
+            <h4>Lender A Perspective</h4>
+            <div id="inspectorLenderA" class="matrix-items"></div>
+          </div>
+          <div class="matrix-card highlight-matrix">
+            <h4>Borrower Perspective</h4>
+            <div id="inspectorBorrower" class="matrix-items"></div>
+          </div>
+          <div class="matrix-card">
+            <h4>Lender B Perspective</h4>
+            <div id="inspectorLenderB" class="matrix-items"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Audit Log Modal -->
+  <div class="modal-backdrop" id="txModal" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title">📜 Canton Ledger Transaction Audit Log</h3>
+        <button class="modal-close-btn" onclick="toggleTxModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="tx-list" id="txListContainer">
+          <!-- Injected dynamically -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

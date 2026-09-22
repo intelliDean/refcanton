@@ -3,6 +3,7 @@
 
 import express, { Request, Response } from 'express';
 import cors from 'cors';
+import path from 'path';
 import { ledger } from './ledger';
 
 const app = express();
@@ -10,6 +11,7 @@ const PORT = process.env.PORT || 4000;
 
 app.use(cors());
 app.use(express.json());
+app.use(express.static(path.join(__dirname, '../../frontend')));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ENDPOINTS

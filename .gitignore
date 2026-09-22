@@ -1,7 +1,5 @@
 # Daml build outputs
-.daml/dist/
-.daml/interfaces/
-.daml/codegen/
+.daml/
 
 # Dependencies & build
 node_modules/
