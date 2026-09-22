@@ -1,0 +1,62 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  verify:
+    name: Build & Test Verification
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Daml SDK 3.4.11
+        run: |
+          curl -sSL https://get.daml.com/ | sh -s 3.4.11
+          echo "$HOME/.daml/bin" >> $GITHUB_PATH
+
+      - name: Verify Daml SDK Installation
+        run: |
+          daml version
+
+      - name: Compile Daml Smart Contracts
+        run: |
+          npm run daml:build
+
+      - name: Run Daml Verification Test Suite
+        run: |
+          npm test
+
+      - name: Install Backend Dependencies
+        run: |
+          npm run backend:install
+
+      - name: Compile Backend TypeScript
+        run: |
+          npm run backend:build
+
+      - name: Test Server Boot & Endpoint Check
+        run: |
+          node backend/dist/server.js &
+          SERVER_PID=$!
+          sleep 3
+          curl --fail http://localhost:4000/api/status || exit 1
+          curl --fail http://localhost:4000/api/state/Borrower || exit 1
+          kill $SERVER_PID

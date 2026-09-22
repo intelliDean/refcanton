@@ -1,10 +1,11 @@
 # Canton Private Refinancing Application
 > *Sub-Transaction Privacy & Atomic Collateral Repledging on Canton Network & Daml*
 
+[![CI](https://github.com/intelliDean/refcanton/actions/workflows/ci.yml/badge.svg)](https://github.com/intelliDean/refcanton/actions/workflows/ci.yml)
 [![Daml Tests](https://img.shields.io/badge/Daml%20Tests-7%20Passed%20(100%25)-brightgreen.svg)]()
 [![Daml SDK](https://img.shields.io/badge/Daml%20SDK-3.4.11-blue.svg)]()
 [![Canton](https://img.shields.io/badge/Canton-Network%20Enabled-blueviolet.svg)]()
-[![License](https://img.shields.io/badge/License-Apache%202.0-yellow.svg)]()
+[![License](https://img.shields.io/badge/License-Apache%202.0-yellow.svg)](LICENSE)
 
 ---
 
