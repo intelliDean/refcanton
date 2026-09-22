@@ -1,0 +1,24 @@
+{
+  "name": "ref-canton",
+  "version": "1.0.0",
+  "description": "Private Refinancing Application on Daml & Canton - HackCanton Season 3",
+  "scripts": {
+    "daml:build": "PATH=\"$HOME/.daml/bin:$PATH\" daml build",
+    "daml:test": "PATH=\"$HOME/.daml/bin:$PATH\" daml test",
+    "daml:codegen": "PATH=\"$HOME/.daml/bin:$PATH\" daml codegen js .daml/dist/ref-canton-0.0.1.dar -o backend/daml-js",
+    "backend:install": "npm --prefix backend install",
+    "backend:build": "npm --prefix backend run build",
+    "start": "node backend/dist/server.js",
+    "test": "PATH=\"$HOME/.daml/bin:$PATH\" daml test"
+  },
+  "keywords": [
+    "canton",
+    "daml",
+    "refinancing",
+    "privacy",
+    "atomic-swap",
+    "hackcanton"
+  ],
+  "author": "HackCanton Team",
+  "license": "Apache-2.0"
+}
