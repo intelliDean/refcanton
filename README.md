@@ -1,5 +1,4 @@
 # Canton Private Refinancing Application
-> **HackCanton Season 3 (July 23 – October 21, 2026)**  
 > *Sub-Transaction Privacy & Atomic Collateral Repledging on Canton Network & Daml*
 
 [![Daml Tests](https://img.shields.io/badge/Daml%20Tests-7%20Passed%20(100%25)-brightgreen.svg)]()
@@ -241,9 +240,9 @@ To run with Canton multi-participant nodes locally:
 
 ---
 
-## 7. Scope & Limitations (Hackathon Disclaimers)
+## 7. Scope & Limitations (Disclaimers)
 
-In strict adherence to the HackCanton Season 3 problem definition:
+In strict adherence to the problem definition:
 - **Test Assets**: All assets (`USD-TEST`, `COLLAT-TEST`) are simulated on-ledger test tokens. They carry no real-world monetary value.
 - **Fixed Negotiated Terms**: Rates and terms are fixed bilaterally between borrower and lenders. Dynamic lender auction orderbooks, AMM liquidity pools, and AI underwriting are excluded from this MVP.
 - **Legal Discharge**: On-ledger execution archives the Daml smart contract debt obligations. Real-world legal UCC filings and lien releases must be coordinated by off-ledger legal counsel.
