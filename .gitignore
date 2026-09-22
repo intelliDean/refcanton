@@ -7,3 +7,4 @@ dist/
 .env
 .env.local
 *.log
+ref_canton.txt
