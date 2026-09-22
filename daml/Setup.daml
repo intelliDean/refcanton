@@ -1,0 +1,92 @@
+-- Setup.daml
+-- Ref Canton: Private Refinancing App
+-- Initializes ledger state for the fixed test example specified in ref_canton.txt:
+-- 1. Operator, Borrower, LenderA, and LenderB parties.
+-- 2. 150 COLLAT-TEST units locked to LenderA securing LoanA (101,000 principal).
+-- 3. Borrower has 5,000 USD-TEST cash (will contribute 1,000).
+-- 4. LenderB has 100,000 USD-TEST cash ready to deploy.
+-- See DECISIONS.md D1, D2, D9.
+
+module Setup where
+
+import Daml.Script
+import DA.Date (date, Month(..))
+import Assets
+import Loan
+
+data TestParties = TestParties
+  with
+    operator : Party
+    borrower : Party
+    lenderA  : Party
+    lenderB  : Party
+  deriving (Eq, Show)
+
+data InitialLedgerState = InitialLedgerState
+  with
+    parties         : TestParties
+    borrowerCashCid : ContractId CashHolding
+    lenderBCashCid  : ContractId CashHolding
+    loanACid        : ContractId LoanA
+    collateralCid   : ContractId LockedCollateralHolding
+  deriving (Eq, Show)
+
+-- Allocates test parties and sets up starting contracts
+initializeLedger : Script InitialLedgerState
+initializeLedger = script do
+  operator <- allocateParty "Operator"
+  borrower <- allocateParty "Borrower"
+  lenderA  <- allocateParty "LenderA"
+  lenderB  <- allocateParty "LenderB"
+
+  let parties = TestParties with operator; borrower; lenderA; lenderB
+
+  -- 1. Create borrower cash (5,000 USD-TEST)
+  borrowerCashCid <- submit operator do
+    createCmd CashHolding with
+      owner        = borrower
+      operator
+      instrument   = "USD-TEST"
+      amount       = 5000.0
+      allocatedFor = None
+
+  -- 2. Create lenderB cash (100,000 USD-TEST)
+  lenderBCashCid <- submit operator do
+    createCmd CashHolding with
+      owner        = lenderB
+      operator
+      instrument   = "USD-TEST"
+      amount       = 100000.0
+      allocatedFor = None
+
+  -- 3. Create borrower collateral and lock to LenderA
+  freeCollateralCid <- submitMulti [operator, borrower] [] do
+    createCmd CollateralHolding with
+      owner      = borrower
+      operator
+      instrument = "COLLAT-TEST"
+      amount     = 150.0
+
+  lockedCollateralCid <- submit borrower do
+    exerciseCmd freeCollateralCid Lock with
+      locker  = lenderA
+      context = "LoanA-collateral"
+
+  -- 4. Create LoanA (signatories: borrower, lenderA)
+  loanACid <- submitMulti [borrower, lenderA] [] do
+    createCmd LoanA with
+      borrower
+      lenderA
+      operator
+      principal       = 101000.0
+      maturityDate    = date 2027 Jun 30
+      collateralCid   = lockedCollateralCid
+      annualRate      = 0.085
+      originationDate = date 2024 Jun 30
+
+  return InitialLedgerState with
+    parties
+    borrowerCashCid
+    lenderBCashCid
+    loanACid
+    collateralCid = lockedCollateralCid

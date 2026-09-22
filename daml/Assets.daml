@@ -1,0 +1,146 @@
+-- Assets.daml
+-- Ref Canton: Private Refinancing App
+-- Test cash and collateral holdings.
+-- Satisfies: actual ledger holdings and enforced locks (spec line 26)
+-- See DECISIONS.md D2, D3, D9.
+
+module Assets where
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- COLLATERAL HOLDINGS
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- Free (unlocked) collateral holding — owned by the borrower.
+template CollateralHolding
+  with
+    owner      : Party    -- the borrower
+    operator   : Party    -- assetAdmin / operator
+    instrument : Text     -- "COLLAT-TEST"
+    amount     : Decimal  -- e.g. 150.0
+  where
+    signatory operator, owner
+
+    -- Lock this collateral to a lender, creating an enforced LockedCollateralHolding.
+    -- Consuming: archives the free holding.
+    choice Lock : ContractId LockedCollateralHolding
+      with
+        locker  : Party   -- the lender who holds the pledge
+        context : Text    -- e.g. "LoanA-collateral"
+      controller owner
+      do
+        create LockedCollateralHolding with
+          owner; operator; locker; instrument; amount; context
+
+
+-- Locked collateral holding — held as pledge by a lender.
+-- Cannot be transferred, split, or spent by the borrower while locked.
+-- Satisfies: "A's loan exists; its collateral cannot be independently spent or pledged again." (spec line 14)
+template LockedCollateralHolding
+  with
+    owner      : Party    -- borrower (equity owner)
+    operator   : Party
+    locker     : Party    -- lender holding the pledge
+    instrument : Text     -- "COLLAT-TEST"
+    amount     : Decimal  -- 150.0
+    context    : Text     -- "LoanA-collateral" or "LoanB-collateral"
+  where
+    signatory operator, owner
+    observer  locker
+
+    -- Release the lock — recreates a free CollateralHolding.
+    -- Can ONLY be called by the locker (lender).
+    choice Unlock : ContractId CollateralHolding
+      controller locker
+      do
+        create CollateralHolding with
+          owner; operator; instrument; amount
+
+    -- Atomic re-pledge: release from outgoing lender, immediately lock to incoming lender.
+    -- Used in the atomic closing to transfer collateral control A -> B.
+    -- Enforces: "150 test collateral units move from securing A's loan to securing B's loan." (spec line 2)
+    choice Repledge : ContractId LockedCollateralHolding
+      with
+        newLocker  : Party
+        newContext : Text
+      controller locker
+      do
+        create LockedCollateralHolding with
+          owner; operator; instrument; amount
+          locker  = newLocker
+          context = newContext
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- CASH HOLDING
+-- Test fungible cash holding representing "USD-TEST".
+-- See DECISIONS.md D9.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+template CashHolding
+  with
+    owner        : Party          -- party holding the cash
+    operator     : Party          -- assetAdmin
+    instrument   : Text           -- "USD-TEST"
+    amount       : Decimal        -- e.g. 100000.0
+    allocatedFor : Optional Party -- e.g. Some borrower when committed to refinancing
+  where
+    signatory operator
+    observer  owner, allocatedFor
+
+    -- Allocate cash to a specific borrower / transaction preparation
+    -- Satisfies: "Unused preparation allocations can be withdrawn or cancelled" (spec line 23)
+    choice Allocate : ContractId CashHolding
+      with
+        forParty : Party
+      controller owner
+      do
+        create this with allocatedFor = Some forParty
+
+    -- Deallocate back to unallocated holding
+    choice Deallocate : ContractId CashHolding
+      controller owner
+      do
+        create this with allocatedFor = None
+
+    -- Transfer the full amount to a recipient.
+    choice Transfer : ContractId CashHolding
+      with
+        recipient : Party
+      controller owner
+      do
+        create this with
+          owner = recipient
+          allocatedFor = None
+
+    -- Transfer a partial amount; return change to the owner.
+    -- Used when borrower contributes exactly 1,000 from a larger balance.
+    choice TransferPartial : (ContractId CashHolding, ContractId CashHolding)
+      with
+        recipient      : Party
+        transferAmount : Decimal
+      controller owner
+      do
+        assertMsg "Transfer amount must be positive" (transferAmount > 0.0)
+        assertMsg "Transfer amount must not exceed balance" (transferAmount <= amount)
+        recipientCid <- create this with
+          owner        = recipient
+          amount       = transferAmount
+          allocatedFor = None
+        changeCid <- create this with
+          owner        = owner
+          amount       = amount - transferAmount
+          allocatedFor = None
+        return (recipientCid, changeCid)
+
+    -- Merge another holding into this one.
+    choice Merge : ContractId CashHolding
+      with
+        otherCid : ContractId CashHolding
+      controller owner
+      do
+        other <- fetch otherCid
+        assertMsg "Can only merge same instrument" (other.instrument == instrument)
+        assertMsg "Can only merge same operator"   (other.operator == operator)
+        assertMsg "Can only merge same owner"      (other.owner == owner)
+        archive otherCid
+        create this with amount = amount + other.amount

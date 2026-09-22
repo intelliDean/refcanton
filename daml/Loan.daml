@@ -1,0 +1,103 @@
+-- Loan.daml
+-- Ref Canton: Private Refinancing App
+-- Defines LoanInterface and two distinct project-built reference loan implementations:
+-- Model A: Fixed-Rate Bullet Loan (lenderA's historical loan)
+-- Model B: Amortizing Cap-Rate Facility (lenderB's replacement loan)
+-- Satisfies: "Two distinct project-built contract models, each with an adapter" (spec line 12)
+-- See DECISIONS.md D1, D4.
+
+module Loan where
+
+import Assets (LockedCollateralHolding)
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- LOAN INTERFACE
+-- Common adapter that both LoanA and LoanB implement.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+data LoanView = LoanView
+  with
+    borrower     : Party
+    lender       : Party
+    principal    : Decimal
+    maturityDate : Date
+    collateralCid: ContractId LockedCollateralHolding
+  deriving (Eq, Show)
+
+interface LoanInterface where
+  viewtype LoanView
+
+  getPayoffAmount : Decimal
+  getCollateralCid : ContractId LockedCollateralHolding
+
+  choice CloseByRefinancing : ()
+    controller (view this).borrower, (view this).lender
+    do return ()
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- MODEL A — Fixed-Rate Bullet Loan
+-- Simple term loan: full principal + accrued interest paid at maturity.
+-- PRIVATE fields: annualRate, originationDate (A's historical terms)
+-- Visible to: borrower + lenderA ONLY. LenderB is structurally excluded.
+-- See DECISIONS.md D1, D4.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+template LoanA
+  with
+    borrower        : Party
+    lenderA         : Party
+    operator        : Party
+    -- Shared fields:
+    principal       : Decimal   -- agreed payoff principal: 101000.0
+    maturityDate    : Date      -- e.g. 2027-06-30
+    collateralCid   : ContractId LockedCollateralHolding
+    -- PRIVATE to lenderA:
+    annualRate      : Decimal   -- e.g. 0.085 (8.5%)
+    originationDate : Date
+  where
+    signatory borrower, lenderA
+    observer  operator
+
+    ensure principal > 0.0 && annualRate > 0.0 && annualRate < 1.0
+
+    interface instance LoanInterface for LoanA where
+      view = LoanView with
+        borrower; lender = lenderA; principal; maturityDate; collateralCid
+
+      getPayoffAmount = principal
+      getCollateralCid = collateralCid
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- MODEL B — Amortizing Cap-Rate Facility
+-- Modern commercial facility with interest rate cap and monthly amortization.
+-- PRIVATE fields: capRate, amortizationPeriods (B's new private terms)
+-- Visible to: borrower + lenderB ONLY. LenderA is structurally excluded.
+-- See DECISIONS.md D1, D4.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+template LoanB
+  with
+    borrower            : Party
+    lenderB             : Party
+    operator            : Party
+    -- Shared fields:
+    principal           : Decimal   -- new loan principal: 100000.0
+    maturityDate        : Date      -- e.g. 2029-12-31
+    collateralCid       : ContractId LockedCollateralHolding
+    -- PRIVATE to lenderB:
+    capRate             : Decimal   -- e.g. 0.075 (7.5% ceiling)
+    amortizationPeriods : Int       -- e.g. 24 periods
+  where
+    signatory borrower, lenderB
+    observer  operator
+
+    ensure principal > 0.0 && capRate > 0.0 && capRate < 1.0 && amortizationPeriods > 0
+
+    interface instance LoanInterface for LoanB where
+      view = LoanView with
+        borrower; lender = lenderB; principal; maturityDate; collateralCid
+
+      getPayoffAmount = principal
+      getCollateralCid = collateralCid

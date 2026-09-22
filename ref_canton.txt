@@ -1,0 +1,44 @@
+Build a private refinancing application on Canton. A borrower replaces an existing lender using the incoming lender's funds. One committed ledger update pays the outgoing lender, closes its loan, transfers collateral control and activates the replacement loan. Users: borrower, outgoing lender A and incoming lender B.
+Use this fixed test example: A's payoff is 101,000 test dollars; B lends 100,000; the borrower contributes 1,000; 150 test collateral units move from securing A's loan to securing B's loan. The new debt is 100,000. The borrower avoids finding the entire payoff upfront; this is not a reduction in debt by 100,000.
+Before substantial development, confirm the event and environment.
+Check team registration, eligibility, exact deadline/timezone, track, deployment network, prior-code/AI rules, repository access and submission fields in the official portal. Complete current rules were not verifiable in this research; do not rely on the earlier provisional dates.
+Use one final project repository from day one. The initial proof becomes the submission's core backend.
+Start from a supported Canton development setup. Pin runtime, Daml SDK, package and token versions. Use separate party credentials.
+Assign contract/ledger work and frontend/backend work. The roughly three-week estimate assumes two full-time developers, one already productive in Daml.
+Spend the first two days proving the transaction. A scripted demonstration is sufficient at this stage.
+Task
+Required result
+Reference loan applications
+Two distinct project-built contract models, each with an adapter. Clearly disclose that these are reference integrations.
+Assets and starting state
+One supported test cash asset and one test collateral asset. A's loan exists; its collateral cannot be independently spent or pledged again.
+Binding approvals
+A's payoff/release approval, B's replacement offer and borrower acceptance bind exact parties, loan state, amounts, asset identifiers, recipients, replacement terms and expiry.
+Atomic closing
+One committed update pays A 101,000, closes A's loan, creates B's 100,000 loan and secures it with the 150 collateral units.
+Privacy
+Query active contracts and transaction history as each lender: A cannot see B's private rate/maturity; B cannot see A's private historical terms.
+Failed closing
+Insufficient funds, expired/changed approvals, replay and direct collateral-release bypass attempts cannot produce a partial or unsecured result.
+Cleanup
+Unused preparation allocations can be withdrawn or cancelled. Failed closing preserves pre-closing state; it does not undo previously committed preparation.
+
+Use actual ledger holdings and enforced locks. Database flags do not satisfy the collateral requirement. Keep lender-specific operations in separate transaction branches under the borrower or limited execution service; verify the resulting visibility. Disclose operator, asset administrator and validator access. See the privacy model and token interfaces.
+Send back after this stage: repository and commit, setup/run instructions, a short screen recording, the successful ledger update ID, before/after loan and holding records, and test results covering failures and party visibility.
+Continue once this proof works. Fix ordinary bugs during this stage; if atomicity, collateral control or privacy cannot be delivered with the selected stack, report the specific blocker and reassess the implementation before adding more features.
+Complete the remaining MVP in the same repository.
+Period
+Work
+Days 3–7
+Finish payoff quotes, replacement offers, borrower acceptance, revocation, expiry and cancellation. Test wrong assets, changed loan state, concurrent closes and cancel-versus-close races.
+Days 8–13
+Build three role views. A issues payoff quotes; B commits an offer and funding; the borrower reviews exact terms and executes closing. Show ledger-confirmed status and role-appropriate receipts.
+Days 14–17
+Have another developer reproduce the demo from a clean checkout. Verify access controls, all failure cases and recovery after an interrupted request.
+Days 18–20
+Deploy to the required environment, record the demonstration and complete submission materials. Shorten this schedule if the verified deadline requires it.
+
+Keep scope to negotiated fixed terms, one currency and one collateral asset. Leave lender discovery, AI underwriting, rate optimization, oracles, bridges and bank integrations out of this MVP.
+Prepare a complete submission, not just the initial proof. Include the functioning app/reviewer access, repository with contract and application code, reproducible setup and demo data, test evidence, and a concise explanation of the problem, Canton contribution and limitations. Record a suggested three-minute demo: failed close → successful close → private lender views. Follow the organizer's actual video limit and required fields.
+Label test assets and project-built loan applications clearly. Do not claim existing lender integrations, production readiness or legal discharge of external loans. Passing the first two-day proof enables the rest of the build; it is not, by itself, a complete hackat
+

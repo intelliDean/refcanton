@@ -1,0 +1,120 @@
+-- Closing.daml
+-- Ref Canton: Private Refinancing App
+-- The ClosingRequest template contains the Execute choice — the atomic close.
+-- One committed ledger update: pays A 101,000, closes A's loan,
+-- transfers collateral A -> B, creates B's loan.
+-- Satisfies: "Atomic closing: One committed update pays A 101,000, closes A's loan, creates B's 100,000 loan and secures it with the 150 collateral units." (spec line 17-18)
+-- See DECISIONS.md D5, D6.
+
+module Closing where
+
+import Assets
+import Loan
+import Approvals
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- CLOSING RECEIPT
+-- Audit record created upon successful atomic closing.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+data ClosingReceipt = ClosingReceipt
+  with
+    loanBCid            : ContractId LoanB
+    closedAt            : Time
+    payoffAmount        : Decimal       -- 101,000.0
+    newPrincipal        : Decimal       -- 100,000.0
+    borrowerContribution: Decimal       -- 1,000.0
+    collateralUnits     : Decimal       -- 150.0
+  deriving (Eq, Show)
+
+template ClosingReceiptContract
+  with
+    borrower   : Party
+    lenderA    : Party
+    lenderB    : Party
+    operator   : Party
+    receipt    : ClosingReceipt
+  where
+    signatory borrower
+    observer  lenderA, lenderB, operator
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- CLOSING REQUEST
+-- Borrower initiates this contract after receiving binding approvals from both lenders.
+-- The Execute choice executes the full atomic close in one committed ledger transaction.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+template ClosingRequest
+  with
+    borrower            : Party
+    lenderA             : Party
+    lenderB             : Party
+    operator            : Party
+    payoffQuoteCid      : ContractId PayoffQuote
+    replacementOfferCid : ContractId ReplacementOffer
+    borrowerCashCid     : ContractId CashHolding
+    loanACid            : ContractId LoanA
+    collateralCid       : ContractId LockedCollateralHolding
+  where
+    signatory borrower
+    observer  lenderA, lenderB
+
+    -- Borrower can cancel before execution
+    choice Cancel : ()
+      controller borrower
+      do return ()
+
+    -- ─────────────────────────────────────────────────────────────────────────
+    -- THE ATOMIC CLOSE
+    -- Single transaction tree: all steps commit together or revert together.
+    -- ─────────────────────────────────────────────────────────────────────────
+    choice Execute : ContractId ClosingReceiptContract
+      controller borrower
+      do
+        -- Step 1: Verify borrower has required 1,000 contribution
+        borrowerCash <- fetch borrowerCashCid
+        assertMsg "Borrower cash insufficient (need 1,000 USD-TEST)"
+          (borrowerCash.amount >= 1000.0)
+
+        -- Step 2: Validate both approval contracts and reconcile numbers
+        quote <- fetch payoffQuoteCid
+        offer <- fetch replacementOfferCid
+        assertMsg "Payoff quote lender mismatch" (quote.lenderA == lenderA)
+        assertMsg "Replacement offer lender mismatch" (offer.lenderB == lenderB)
+        assertMsg "Reconciliation: B's principal + borrower 1,000 == A's payoff"
+          (offer.newPrincipal + 1000.0 == quote.payoffAmount)
+        assertMsg "Collateral match: offer matches loan collateral units"
+          (offer.collateralUnits == 150.0)
+
+        -- Step 3: Transfer borrower's 1,000 contribution to lenderA
+        _ <- exercise borrowerCashCid TransferPartial with
+          recipient      = lenderA
+          transferAmount = 1000.0
+
+        -- Step 4: Settle LoanA and repledge collateral to lenderB
+        -- Closes LoanA, releases A's claim, locks collateral to lenderB
+        newLockedCollateralCid <- exercise payoffQuoteCid SettleAndRepledge with
+          newLocker     = lenderB
+          collateralCid = collateralCid
+
+        -- Step 5: Accept offer, fund 100,000 to lenderA, and create LoanB
+        -- Transferred funds (100,000) + borrower funds (1,000) = 101,000 received by lenderA
+        (_, loanBCid) <- exercise replacementOfferCid AcceptAndFund with
+          recipientA             = lenderA
+          newLockedCollateralCid = newLockedCollateralCid
+
+        -- Step 6: Create immutable closing receipt for parties and operator audit
+        now <- getTime
+        create ClosingReceiptContract with
+          borrower
+          lenderA
+          lenderB
+          operator
+          receipt = ClosingReceipt with
+            loanBCid
+            closedAt             = now
+            payoffAmount         = quote.payoffAmount
+            newPrincipal         = offer.newPrincipal
+            borrowerContribution = 1000.0
+            collateralUnits      = offer.collateralUnits

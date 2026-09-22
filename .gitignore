@@ -1,0 +1,11 @@
+# Daml build outputs
+.daml/dist/
+.daml/interfaces/
+.daml/codegen/
+
+# Dependencies & build
+node_modules/
+dist/
+.env
+.env.local
+*.log

@@ -1,0 +1,129 @@
+-- Approvals.daml
+-- Ref Canton: Private Refinancing App
+-- PayoffQuote (lenderA's binding release offer) and
+-- ReplacementOffer (lenderB's binding funding commitment).
+-- Pre-signed authorization contracts that make the atomic close possible.
+-- Satisfies: "Binding approvals bind exact parties, loan state, amounts, asset identifiers, recipients, replacement terms and expiry." (spec line 15-16)
+-- See DECISIONS.md D5.
+
+module Approvals where
+
+import Assets
+import Loan
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- PAYOFF QUOTE
+-- LenderA's binding offer to release LoanA and repledge collateral upon receiving 101,000.
+-- Pins: exact loan state, exact amount, exact account, exact expiry.
+-- Privacy: visible to lenderA + borrower ONLY. LenderB is structurally excluded.
+-- See DECISIONS.md D5.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+template PayoffQuote
+  with
+    lenderA       : Party
+    borrower      : Party
+    loanACid      : ContractId LoanA   -- pins exact loan state (replay protection)
+    payoffAmount  : Decimal            -- 101,000.0
+    instrument    : Text               -- "USD-TEST"
+    expiresAt     : Time               -- hard expiry
+  where
+    signatory lenderA
+    observer  borrower
+
+    ensure payoffAmount > 0.0
+
+    -- LenderA revokes the quote prior to borrower triggering execution.
+    choice WithdrawQuote : ()
+      controller lenderA
+      do return ()
+
+    -- Borrower exercises this INSIDE ClosingRequest.Execute.
+    -- Signatory lenderA + controller borrower provide authorization to archive LoanA
+    -- and re-pledge the collateral to lenderB.
+    choice SettleAndRepledge : ContractId LockedCollateralHolding
+      with
+        newLocker     : Party
+        collateralCid : ContractId LockedCollateralHolding
+      controller borrower
+      do
+        now <- getTime
+        assertMsg "PayoffQuote has expired" (now < expiresAt)
+        loanA <- fetch loanACid
+        assertMsg "Payoff amount must match loan principal" (payoffAmount == loanA.principal)
+        assertMsg "Collateral contract must match loan" (collateralCid == loanA.collateralCid)
+        archive loanACid
+        exercise collateralCid Repledge with
+          newLocker  = newLocker
+          newContext = "LoanB-collateral"
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- REPLACEMENT OFFER
+-- LenderB's binding commitment to fund 100,000 and create LoanB.
+-- Pins: exact new terms, exact collateral units, exact funding, exact expiry.
+-- Privacy: visible to lenderB + borrower ONLY. LenderA is structurally excluded.
+-- See DECISIONS.md D5.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+template ReplacementOffer
+  with
+    lenderB             : Party
+    borrower            : Party
+    operator            : Party
+    -- Shared fields (borrower + B see):
+    newPrincipal        : Decimal            -- 100,000.0
+    maturityDate        : Date               -- new loan maturity
+    collateralInstrument: Text               -- "COLLAT-TEST"
+    collateralUnits     : Decimal            -- 150.0
+    lenderBCashCid      : ContractId CashHolding  -- B's 100,000 ready to deploy
+    cashInstrument      : Text               -- "USD-TEST"
+    expiresAt           : Time
+    -- PRIVATE to lenderB (lenderA never sees these):
+    capRate             : Decimal            -- e.g. 0.075
+    amortizationPeriods : Int                -- e.g. 24
+  where
+    signatory lenderB
+    observer  borrower
+
+    ensure newPrincipal > 0.0 && capRate > 0.0 && capRate < 1.0 && amortizationPeriods > 0 && collateralUnits > 0.0
+
+    -- LenderB withdraws the offer before closing executes.
+    choice WithdrawOffer : ()
+      controller lenderB
+      do return ()
+
+    -- Borrower exercises this INSIDE ClosingRequest.Execute.
+    -- Signatory lenderB + controller borrower provide authorization to transfer B's cash
+    -- to lenderA and instantiate LoanB.
+    choice AcceptAndFund : (ContractId CashHolding, ContractId LoanB)
+      with
+        recipientA             : Party
+        newLockedCollateralCid : ContractId LockedCollateralHolding
+      controller borrower
+      do
+        now <- getTime
+        assertMsg "ReplacementOffer has expired" (now < expiresAt)
+        bCash <- fetch lenderBCashCid
+        assertMsg "Lender B cash insufficient" (bCash.amount >= newPrincipal)
+        assertMsg "Cash instrument mismatch" (bCash.instrument == cashInstrument)
+        lockedCollateral <- fetch newLockedCollateralCid
+        assertMsg "Collateral amount must match offer" (lockedCollateral.amount == collateralUnits)
+        assertMsg "Collateral locker must be lenderB" (lockedCollateral.locker == lenderB)
+        assertMsg "Collateral owner must be borrower" (lockedCollateral.owner == borrower)
+        assertMsg "Collateral instrument mismatch" (lockedCollateral.instrument == collateralInstrument)
+
+        cashForA <- exercise lenderBCashCid Transfer with
+          recipient = recipientA
+
+        loanBCid <- create LoanB with
+          borrower
+          lenderB
+          operator
+          principal = newPrincipal
+          maturityDate
+          collateralCid = newLockedCollateralCid
+          capRate
+          amortizationPeriods
+
+        return (cashForA, loanBCid)
