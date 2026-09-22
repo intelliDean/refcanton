@@ -5,7 +5,8 @@
 -- 2. Before/after ledger balances & loan states
 -- 3. Failure cases: insufficient borrower funds, replay attempts, expired approvals
 -- 4. Privacy verification: LenderA cannot see B's private terms, LenderB cannot see A's private terms
--- Satisfies ref_canton.txt: "The initial proof becomes the submission's core backend" (spec line 5, 8, 17-22)
+-- 5. Revocation & cancellation safety: Quote revocation, offer withdrawal, closing cancellation
+-- Satisfies ref_canton.txt: "The initial proof becomes the submission's core backend" (spec line 5, 8, 17-22, 33)
 
 module TestRefinancing where
 
@@ -13,77 +14,29 @@ import Daml.Script
 import DA.Date (date, Month(..))
 import DA.Time (time)
 import Assets
-import Loan
+import Loan ()
 import Approvals
 import Closing
+import Setup (TestParties(..), InitialLedgerState(..), initializeLedger, initializeLedgerWithBorrowerCash)
 
-testRefinancingLifecycle : Script ()
-testRefinancingLifecycle = script do
-  operator <- allocateParty "Operator"
-  borrower <- allocateParty "Borrower"
-  lenderA  <- allocateParty "LenderA"
-  lenderB  <- allocateParty "LenderB"
+-- ─────────────────────────────────────────────────────────────────────────────
+-- TEST FIXTURE HELPERS
+-- ─────────────────────────────────────────────────────────────────────────────
 
-  let t0 = time (date 2026 Jul 25) 10 0 0
-  let tExpiry = time (date 2026 Jul 26) 18 0 0
+data TestApprovals = TestApprovals
+  with
+    payoffQuoteCid          : ContractId PayoffQuote
+    replacementOfferCid     : ContractId ReplacementOffer
+    allocatedLenderBCashCid : ContractId CashHolding
+  deriving (Eq, Show)
 
-  setTime t0
+-- Helper to set up active binding PayoffQuote and ReplacementOffer
+setupApprovals : TestParties -> InitialLedgerState -> Time -> Script TestApprovals
+setupApprovals parties state tExpiry = do
+  let TestParties{operator, borrower, lenderA, lenderB} = parties
+  let InitialLedgerState{loanACid, lenderBCashCid} = state
 
-  -- ───────────────────────────────────────────────────────────────────────────
-  -- 1. INITIAL STATE SETUP
-  -- ───────────────────────────────────────────────────────────────────────────
-  -- Borrower has 5,000 USD-TEST cash
-  borrowerCashCid <- submit operator do
-    createCmd CashHolding with
-      owner        = borrower
-      operator
-      instrument   = "USD-TEST"
-      amount       = 5000.0
-      allocatedFor = None
-
-  -- LenderB has 100,000 USD-TEST cash ready to deploy
-  lenderBCashCid <- submit operator do
-    createCmd CashHolding with
-      owner        = lenderB
-      operator
-      instrument   = "USD-TEST"
-      amount       = 100000.0
-      allocatedFor = None
-
-  -- Borrower has 150 COLLAT-TEST units, locked to LenderA
-  freeCollateralCid <- submitMulti [operator, borrower] [] do
-    createCmd CollateralHolding with
-      owner      = borrower
-      operator
-      instrument = "COLLAT-TEST"
-      amount     = 150.0
-
-  lockedCollateralCid <- submit borrower do
-    exerciseCmd freeCollateralCid Lock with
-      locker  = lenderA
-      context = "LoanA-collateral"
-
-  -- LoanA exists (101,000 payoff principal, 8.5% annual rate)
-  loanACid <- submitMulti [borrower, lenderA] [] do
-    createCmd LoanA with
-      borrower
-      lenderA
-      operator
-      principal       = 101000.0
-      maturityDate    = date 2027 Jun 30
-      collateralCid   = lockedCollateralCid
-      annualRate      = 0.085
-      originationDate = date 2024 Jun 30
-
-  -- Verify initial state
-  Some loanA <- queryContractId borrower loanACid
-  assert (loanA.principal == 101000.0)
-  assert (loanA.lenderA == lenderA)
-
-  -- ───────────────────────────────────────────────────────────────────────────
-  -- 2. BINDING APPROVALS
-  -- ───────────────────────────────────────────────────────────────────────────
-  -- LenderA issues PayoffQuote for 101,000
+  -- LenderA issues PayoffQuote for 101,000 USD-TEST
   payoffQuoteCid <- submit lenderA do
     createCmd PayoffQuote with
       lenderA
@@ -98,7 +51,7 @@ testRefinancingLifecycle = script do
     exerciseCmd lenderBCashCid Allocate with
       forParty = borrower
 
-  -- LenderB issues ReplacementOffer for 100,000 (with private capRate 7.5%)
+  -- LenderB issues ReplacementOffer for 100,000 USD-TEST (with private capRate 7.5%)
   replacementOfferCid <- submit lenderB do
     createCmd ReplacementOffer with
       lenderB
@@ -114,30 +67,54 @@ testRefinancingLifecycle = script do
       capRate              = 0.075
       amortizationPeriods  = 24
 
-  -- ───────────────────────────────────────────────────────────────────────────
+  return TestApprovals with
+    payoffQuoteCid
+    replacementOfferCid
+    allocatedLenderBCashCid
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 1. HAPPY PATH: Full Refinancing Lifecycle
+-- ─────────────────────────────────────────────────────────────────────────────
+
+testRefinancingLifecycle : Script ()
+testRefinancingLifecycle = script do
+  let t0 = time (date 2026 Jul 25) 10 0 0
+  let tExpiry = time (date 2026 Jul 26) 18 0 0
+  setTime t0
+
+  -- 1. INITIAL STATE SETUP
+  state <- initializeLedger
+  let TestParties{operator, borrower, lenderA, lenderB} = state.parties
+
+  -- Verify initial state
+  Some loanA <- queryContractId borrower state.loanACid
+  assert (loanA.principal == 101000.0)
+  assert (loanA.lenderA == lenderA)
+
+  -- 2. BINDING APPROVALS
+  approvals <- setupApprovals state.parties state tExpiry
+
   -- 3. CLOSING INITIATION & ATOMIC EXECUTION
-  -- ───────────────────────────────────────────────────────────────────────────
   closingRequestCid <- submit borrower do
     createCmd ClosingRequest with
       borrower
       lenderA
       lenderB
       operator
-      payoffQuoteCid
-      replacementOfferCid
-      borrowerCashCid
-      loanACid
-      collateralCid = lockedCollateralCid
+      payoffQuoteCid      = approvals.payoffQuoteCid
+      replacementOfferCid = approvals.replacementOfferCid
+      borrowerCashCid     = state.borrowerCashCid
+      loanACid            = state.loanACid
+      collateralCid       = state.collateralCid
 
   -- Execute atomic closing
   receiptCid <- submit borrower do
     exerciseCmd closingRequestCid Execute
 
-  -- ───────────────────────────────────────────────────────────────────────────
   -- 4. VERIFY FINAL LEDGER STATE
-  -- ───────────────────────────────────────────────────────────────────────────
   -- A. LoanA must be archived
-  loanAAfter <- queryContractId borrower loanACid
+  loanAAfter <- queryContractId borrower state.loanACid
   assert (loanAAfter == None)
 
   -- B. LoanB must exist with 100,000 principal
@@ -166,95 +143,45 @@ testRefinancingLifecycle = script do
   let totalBorrowerCash = sum (map (\(_, h) -> h.amount) borrowerHoldings)
   assert (totalBorrowerCash == 4000.0)
 
-  -- ───────────────────────────────────────────────────────────────────────────
   -- 5. PRIVACY AUDIT (Query active contracts as each lender)
-  -- Satisfies ref_canton.txt line 20: "A cannot see B's private rate/maturity; B cannot see A's private historical terms."
-  -- ───────────────────────────────────────────────────────────────────────────
   -- LenderA CANNOT query LoanB
   loanBFromA <- queryContractId lenderA newLoanBCid
   assertMsg "Privacy breach: LenderA must not see LoanB" (loanBFromA == None)
 
   -- LenderB CANNOT query LoanA historical terms
-  loanAFromB <- queryContractId lenderB loanACid
+  loanAFromB <- queryContractId lenderB state.loanACid
   assertMsg "Privacy breach: LenderB must not see LoanA" (loanAFromB == None)
 
   return ()
 
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- FAILURE TEST CASES
--- Satisfies ref_canton.txt line 21-22:
--- "Insufficient funds, expired/changed approvals, replay and direct collateral-release bypass attempts cannot produce a partial or unsecured result."
+-- 2. FAILURE TEST CASES
 -- ─────────────────────────────────────────────────────────────────────────────
 
 testInsufficientBorrowerFundsFails : Script ()
 testInsufficientBorrowerFundsFails = script do
-  operator <- allocateParty "Operator"
-  borrower <- allocateParty "Borrower"
-  lenderA  <- allocateParty "LenderA"
-  lenderB  <- allocateParty "LenderB"
-
   let t0 = time (date 2026 Jul 25) 10 0 0
   let tExpiry = time (date 2026 Jul 26) 18 0 0
   setTime t0
 
-  -- Borrower only has 500 USD-TEST (needs 1,000)
-  poorBorrowerCashCid <- submit operator do
-    createCmd CashHolding with
-      owner        = borrower
-      operator
-      instrument   = "USD-TEST"
-      amount       = 500.0
-      allocatedFor = None
+  -- Borrower only has 500 USD-TEST (needs 1,000 equity contribution)
+  state <- initializeLedgerWithBorrowerCash 500.0
+  let TestParties{operator, borrower, lenderA, lenderB} = state.parties
 
-  lenderBCashCid <- submit operator do
-    createCmd CashHolding with
-      owner        = lenderB
-      operator
-      instrument   = "USD-TEST"
-      amount       = 100000.0
-      allocatedFor = None
-
-  allocatedLenderBCashCid <- submit lenderB do
-    exerciseCmd lenderBCashCid Allocate with
-      forParty = borrower
-
-  freeCollateralCid <- submitMulti [operator, borrower] [] do
-    createCmd CollateralHolding with
-      owner      = borrower
-      operator
-      instrument = "COLLAT-TEST"
-      amount     = 150.0
-
-  lockedCollateralCid <- submit borrower do
-    exerciseCmd freeCollateralCid Lock with
-      locker  = lenderA
-      context = "LoanA-collateral"
-
-  loanACid <- submitMulti [borrower, lenderA] [] do
-    createCmd LoanA with
-      borrower; lenderA; operator
-      principal       = 101000.0
-      maturityDate    = date 2027 Jun 30
-      collateralCid   = lockedCollateralCid
-      annualRate      = 0.085
-      originationDate = date 2024 Jun 30
-
-  payoffQuoteCid <- submit lenderA do
-    createCmd PayoffQuote with
-      lenderA; borrower; loanACid; payoffAmount = 101000.0; instrument = "USD-TEST"; expiresAt = tExpiry
-
-  replacementOfferCid <- submit lenderB do
-    createCmd ReplacementOffer with
-      lenderB; borrower; operator; newPrincipal = 100000.0; maturityDate = date 2029 Dec 31
-      collateralInstrument = "COLLAT-TEST"; collateralUnits = 150.0; lenderBCashCid = allocatedLenderBCashCid
-      cashInstrument = "USD-TEST"; expiresAt = tExpiry; capRate = 0.075; amortizationPeriods = 24
+  approvals <- setupApprovals state.parties state tExpiry
 
   closingRequestCid <- submit borrower do
     createCmd ClosingRequest with
-      borrower; lenderA; lenderB; operator
-      payoffQuoteCid; replacementOfferCid; borrowerCashCid = poorBorrowerCashCid
-      loanACid; collateralCid = lockedCollateralCid
+      borrower
+      lenderA
+      lenderB
+      operator
+      payoffQuoteCid      = approvals.payoffQuoteCid
+      replacementOfferCid = approvals.replacementOfferCid
+      borrowerCashCid     = state.borrowerCashCid
+      loanACid            = state.loanACid
+      collateralCid       = state.collateralCid
 
   -- Must fail because borrower lacks 1,000 USD-TEST
   submitMustFail borrower do
@@ -263,71 +190,26 @@ testInsufficientBorrowerFundsFails = script do
 
 testExpiredApprovalFails : Script ()
 testExpiredApprovalFails = script do
-  operator <- allocateParty "Operator"
-  borrower <- allocateParty "Borrower"
-  lenderA  <- allocateParty "LenderA"
-  lenderB  <- allocateParty "LenderB"
-
   let t0 = time (date 2026 Jul 25) 10 0 0
   let tExpiry = time (date 2026 Jul 26) 18 0 0
   setTime t0
 
-  borrowerCashCid <- submit operator do
-    createCmd CashHolding with
-      owner        = borrower
-      operator
-      instrument   = "USD-TEST"
-      amount       = 5000.0
-      allocatedFor = None
+  state <- initializeLedger
+  let TestParties{operator, borrower, lenderA, lenderB} = state.parties
 
-  lenderBCashCid <- submit operator do
-    createCmd CashHolding with
-      owner        = lenderB
-      operator
-      instrument   = "USD-TEST"
-      amount       = 100000.0
-      allocatedFor = None
-
-  allocatedLenderBCashCid <- submit lenderB do
-    exerciseCmd lenderBCashCid Allocate with
-      forParty = borrower
-
-  freeCollateralCid <- submitMulti [operator, borrower] [] do
-    createCmd CollateralHolding with
-      owner      = borrower
-      operator
-      instrument = "COLLAT-TEST"
-      amount     = 150.0
-
-  lockedCollateralCid <- submit borrower do
-    exerciseCmd freeCollateralCid Lock with
-      locker  = lenderA
-      context = "LoanA-collateral"
-
-  loanACid <- submitMulti [borrower, lenderA] [] do
-    createCmd LoanA with
-      borrower; lenderA; operator
-      principal       = 101000.0
-      maturityDate    = date 2027 Jun 30
-      collateralCid   = lockedCollateralCid
-      annualRate      = 0.085
-      originationDate = date 2024 Jun 30
-
-  payoffQuoteCid <- submit lenderA do
-    createCmd PayoffQuote with
-      lenderA; borrower; loanACid; payoffAmount = 101000.0; instrument = "USD-TEST"; expiresAt = tExpiry
-
-  replacementOfferCid <- submit lenderB do
-    createCmd ReplacementOffer with
-      lenderB; borrower; operator; newPrincipal = 100000.0; maturityDate = date 2029 Dec 31
-      collateralInstrument = "COLLAT-TEST"; collateralUnits = 150.0; lenderBCashCid = allocatedLenderBCashCid
-      cashInstrument = "USD-TEST"; expiresAt = tExpiry; capRate = 0.075; amortizationPeriods = 24
+  approvals <- setupApprovals state.parties state tExpiry
 
   closingRequestCid <- submit borrower do
     createCmd ClosingRequest with
-      borrower; lenderA; lenderB; operator
-      payoffQuoteCid; replacementOfferCid; borrowerCashCid
-      loanACid; collateralCid = lockedCollateralCid
+      borrower
+      lenderA
+      lenderB
+      operator
+      payoffQuoteCid      = approvals.payoffQuoteCid
+      replacementOfferCid = approvals.replacementOfferCid
+      borrowerCashCid     = state.borrowerCashCid
+      loanACid            = state.loanACid
+      collateralCid       = state.collateralCid
 
   -- Fast-forward past expiry time
   setTime (time (date 2026 Jul 27) 0 0 0)
@@ -337,166 +219,68 @@ testExpiredApprovalFails = script do
     exerciseCmd closingRequestCid Execute
 
 
--- ─────────────────────────────────────────────────────────────────────────────
--- REVOCATION TEST: LenderA withdraws PayoffQuote
--- Satisfies spec line 33: "revocation, expiry and cancellation"
--- ─────────────────────────────────────────────────────────────────────────────
 testQuoteRevocationFails : Script ()
 testQuoteRevocationFails = script do
-  operator <- allocateParty "Operator"
-  borrower <- allocateParty "Borrower"
-  lenderA  <- allocateParty "LenderA"
-  lenderB  <- allocateParty "LenderB"
-
   let t0 = time (date 2026 Jul 25) 10 0 0
   let tExpiry = time (date 2026 Jul 26) 18 0 0
   setTime t0
 
-  borrowerCashCid <- submit operator do
-    createCmd CashHolding with
-      owner        = borrower
-      operator
-      instrument   = "USD-TEST"
-      amount       = 5000.0
-      allocatedFor = None
+  state <- initializeLedger
+  let TestParties{operator, borrower, lenderA, lenderB} = state.parties
 
-  lenderBCashCid <- submit operator do
-    createCmd CashHolding with
-      owner        = lenderB
-      operator
-      instrument   = "USD-TEST"
-      amount       = 100000.0
-      allocatedFor = None
-
-  allocatedLenderBCashCid <- submit lenderB do
-    exerciseCmd lenderBCashCid Allocate with
-      forParty = borrower
-
-  freeCollateralCid <- submitMulti [operator, borrower] [] do
-    createCmd CollateralHolding with
-      owner      = borrower
-      operator
-      instrument = "COLLAT-TEST"
-      amount     = 150.0
-
-  lockedCollateralCid <- submit borrower do
-    exerciseCmd freeCollateralCid Lock with
-      locker  = lenderA
-      context = "LoanA-collateral"
-
-  loanACid <- submitMulti [borrower, lenderA] [] do
-    createCmd LoanA with
-      borrower; lenderA; operator
-      principal       = 101000.0
-      maturityDate    = date 2027 Jun 30
-      collateralCid   = lockedCollateralCid
-      annualRate      = 0.085
-      originationDate = date 2024 Jun 30
-
-  payoffQuoteCid <- submit lenderA do
-    createCmd PayoffQuote with
-      lenderA; borrower; loanACid; payoffAmount = 101000.0; instrument = "USD-TEST"; expiresAt = tExpiry
-
-  replacementOfferCid <- submit lenderB do
-    createCmd ReplacementOffer with
-      lenderB; borrower; operator; newPrincipal = 100000.0; maturityDate = date 2029 Dec 31
-      collateralInstrument = "COLLAT-TEST"; collateralUnits = 150.0; lenderBCashCid = allocatedLenderBCashCid
-      cashInstrument = "USD-TEST"; expiresAt = tExpiry; capRate = 0.075; amortizationPeriods = 24
+  approvals <- setupApprovals state.parties state tExpiry
 
   closingRequestCid <- submit borrower do
     createCmd ClosingRequest with
-      borrower; lenderA; lenderB; operator
-      payoffQuoteCid; replacementOfferCid; borrowerCashCid
-      loanACid; collateralCid = lockedCollateralCid
+      borrower
+      lenderA
+      lenderB
+      operator
+      payoffQuoteCid      = approvals.payoffQuoteCid
+      replacementOfferCid = approvals.replacementOfferCid
+      borrowerCashCid     = state.borrowerCashCid
+      loanACid            = state.loanACid
+      collateralCid       = state.collateralCid
 
   -- LenderA revokes their quote before closing
   submit lenderA do
-    exerciseCmd payoffQuoteCid WithdrawQuote
+    exerciseCmd approvals.payoffQuoteCid WithdrawQuote
 
   -- Execution must fail because quote was revoked
   submitMustFail borrower do
     exerciseCmd closingRequestCid Execute
 
 
--- ─────────────────────────────────────────────────────────────────────────────
--- WITHDRAWAL TEST: LenderB withdraws ReplacementOffer & reclaims allocation
--- Satisfies spec line 23-24: "Unused preparation allocations can be withdrawn or cancelled"
--- ─────────────────────────────────────────────────────────────────────────────
 testOfferWithdrawalFails : Script ()
 testOfferWithdrawalFails = script do
-  operator <- allocateParty "Operator"
-  borrower <- allocateParty "Borrower"
-  lenderA  <- allocateParty "LenderA"
-  lenderB  <- allocateParty "LenderB"
-
   let t0 = time (date 2026 Jul 25) 10 0 0
   let tExpiry = time (date 2026 Jul 26) 18 0 0
   setTime t0
 
-  borrowerCashCid <- submit operator do
-    createCmd CashHolding with
-      owner        = borrower
-      operator
-      instrument   = "USD-TEST"
-      amount       = 5000.0
-      allocatedFor = None
+  state <- initializeLedger
+  let TestParties{operator, borrower, lenderA, lenderB} = state.parties
 
-  lenderBCashCid <- submit operator do
-    createCmd CashHolding with
-      owner        = lenderB
-      operator
-      instrument   = "USD-TEST"
-      amount       = 100000.0
-      allocatedFor = None
-
-  allocatedLenderBCashCid <- submit lenderB do
-    exerciseCmd lenderBCashCid Allocate with
-      forParty = borrower
-
-  freeCollateralCid <- submitMulti [operator, borrower] [] do
-    createCmd CollateralHolding with
-      owner      = borrower
-      operator
-      instrument = "COLLAT-TEST"
-      amount     = 150.0
-
-  lockedCollateralCid <- submit borrower do
-    exerciseCmd freeCollateralCid Lock with
-      locker  = lenderA
-      context = "LoanA-collateral"
-
-  loanACid <- submitMulti [borrower, lenderA] [] do
-    createCmd LoanA with
-      borrower; lenderA; operator
-      principal       = 101000.0
-      maturityDate    = date 2027 Jun 30
-      collateralCid   = lockedCollateralCid
-      annualRate      = 0.085
-      originationDate = date 2024 Jun 30
-
-  payoffQuoteCid <- submit lenderA do
-    createCmd PayoffQuote with
-      lenderA; borrower; loanACid; payoffAmount = 101000.0; instrument = "USD-TEST"; expiresAt = tExpiry
-
-  replacementOfferCid <- submit lenderB do
-    createCmd ReplacementOffer with
-      lenderB; borrower; operator; newPrincipal = 100000.0; maturityDate = date 2029 Dec 31
-      collateralInstrument = "COLLAT-TEST"; collateralUnits = 150.0; lenderBCashCid = allocatedLenderBCashCid
-      cashInstrument = "USD-TEST"; expiresAt = tExpiry; capRate = 0.075; amortizationPeriods = 24
+  approvals <- setupApprovals state.parties state tExpiry
 
   closingRequestCid <- submit borrower do
     createCmd ClosingRequest with
-      borrower; lenderA; lenderB; operator
-      payoffQuoteCid; replacementOfferCid; borrowerCashCid
-      loanACid; collateralCid = lockedCollateralCid
+      borrower
+      lenderA
+      lenderB
+      operator
+      payoffQuoteCid      = approvals.payoffQuoteCid
+      replacementOfferCid = approvals.replacementOfferCid
+      borrowerCashCid     = state.borrowerCashCid
+      loanACid            = state.loanACid
+      collateralCid       = state.collateralCid
 
   -- LenderB withdraws their offer
   submit lenderB do
-    exerciseCmd replacementOfferCid WithdrawOffer
+    exerciseCmd approvals.replacementOfferCid WithdrawOffer
 
   -- LenderB deallocates their cash back to general balance
   reclaimedCashCid <- submit lenderB do
-    exerciseCmd allocatedLenderBCashCid Deallocate
+    exerciseCmd approvals.allocatedLenderBCashCid Deallocate
 
   Some bCash <- queryContractId lenderB reclaimedCashCid
   assert (bCash.amount == 100000.0)
@@ -507,77 +291,28 @@ testOfferWithdrawalFails = script do
     exerciseCmd closingRequestCid Execute
 
 
--- ─────────────────────────────────────────────────────────────────────────────
--- CANCELLATION TEST: Borrower cancels ClosingRequest
--- Satisfies spec line 33: "cancel-versus-close races"
--- ─────────────────────────────────────────────────────────────────────────────
 testBorrowerCancelFails : Script ()
 testBorrowerCancelFails = script do
-  operator <- allocateParty "Operator"
-  borrower <- allocateParty "Borrower"
-  lenderA  <- allocateParty "LenderA"
-  lenderB  <- allocateParty "LenderB"
-
   let t0 = time (date 2026 Jul 25) 10 0 0
   let tExpiry = time (date 2026 Jul 26) 18 0 0
   setTime t0
 
-  borrowerCashCid <- submit operator do
-    createCmd CashHolding with
-      owner        = borrower
-      operator
-      instrument   = "USD-TEST"
-      amount       = 5000.0
-      allocatedFor = None
+  state <- initializeLedger
+  let TestParties{operator, borrower, lenderA, lenderB} = state.parties
 
-  lenderBCashCid <- submit operator do
-    createCmd CashHolding with
-      owner        = lenderB
-      operator
-      instrument   = "USD-TEST"
-      amount       = 100000.0
-      allocatedFor = None
-
-  allocatedLenderBCashCid <- submit lenderB do
-    exerciseCmd lenderBCashCid Allocate with
-      forParty = borrower
-
-  freeCollateralCid <- submitMulti [operator, borrower] [] do
-    createCmd CollateralHolding with
-      owner      = borrower
-      operator
-      instrument = "COLLAT-TEST"
-      amount     = 150.0
-
-  lockedCollateralCid <- submit borrower do
-    exerciseCmd freeCollateralCid Lock with
-      locker  = lenderA
-      context = "LoanA-collateral"
-
-  loanACid <- submitMulti [borrower, lenderA] [] do
-    createCmd LoanA with
-      borrower; lenderA; operator
-      principal       = 101000.0
-      maturityDate    = date 2027 Jun 30
-      collateralCid   = lockedCollateralCid
-      annualRate      = 0.085
-      originationDate = date 2024 Jun 30
-
-  payoffQuoteCid <- submit lenderA do
-    createCmd PayoffQuote with
-      lenderA; borrower; loanACid; payoffAmount = 101000.0; instrument = "USD-TEST"; expiresAt = tExpiry
-
-  replacementOfferCid <- submit lenderB do
-    createCmd ReplacementOffer with
-      lenderB; borrower; operator; newPrincipal = 100000.0; maturityDate = date 2029 Dec 31
-      collateralInstrument = "COLLAT-TEST"; collateralUnits = 150.0; lenderBCashCid = allocatedLenderBCashCid
-      cashInstrument = "USD-TEST"; expiresAt = tExpiry; capRate = 0.075; amortizationPeriods = 24
+  approvals <- setupApprovals state.parties state tExpiry
 
   closingRequestCid <- submit borrower do
     createCmd ClosingRequest with
-      borrower; lenderA; lenderB; operator
-      payoffQuoteCid; replacementOfferCid; borrowerCashCid
-      loanACid; collateralCid = lockedCollateralCid
+      borrower
+      lenderA
+      lenderB
+      operator
+      payoffQuoteCid      = approvals.payoffQuoteCid
+      replacementOfferCid = approvals.replacementOfferCid
+      borrowerCashCid     = state.borrowerCashCid
+      loanACid            = state.loanACid
+      collateralCid       = state.collateralCid
 
   -- Borrower cancels the closing request
   submit borrower do
@@ -586,4 +321,3 @@ testBorrowerCancelFails = script do
   -- Execution must fail because closing request was cancelled and archived
   submitMustFail borrower do
     exerciseCmd closingRequestCid Execute
-

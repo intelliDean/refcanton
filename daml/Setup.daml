@@ -31,9 +31,9 @@ data InitialLedgerState = InitialLedgerState
     collateralCid   : ContractId LockedCollateralHolding
   deriving (Eq, Show)
 
--- Allocates test parties and sets up starting contracts
-initializeLedger : Script InitialLedgerState
-initializeLedger = script do
+-- Allocates test parties and sets up starting contracts with customizable borrower cash
+initializeLedgerWithBorrowerCash : Decimal -> Script InitialLedgerState
+initializeLedgerWithBorrowerCash borrowerCashAmount = script do
   operator <- allocateParty "Operator"
   borrower <- allocateParty "Borrower"
   lenderA  <- allocateParty "LenderA"
@@ -41,13 +41,13 @@ initializeLedger = script do
 
   let parties = TestParties with operator; borrower; lenderA; lenderB
 
-  -- 1. Create borrower cash (5,000 USD-TEST)
+  -- 1. Create borrower cash
   borrowerCashCid <- submit operator do
     createCmd CashHolding with
       owner        = borrower
       operator
       instrument   = "USD-TEST"
-      amount       = 5000.0
+      amount       = borrowerCashAmount
       allocatedFor = None
 
   -- 2. Create lenderB cash (100,000 USD-TEST)
@@ -60,7 +60,7 @@ initializeLedger = script do
       allocatedFor = None
 
   -- 3. Create borrower collateral and lock to LenderA
-  freeCollateralCid <- submitMulti [operator, borrower] [] do
+  freeCollateralCid <- submit (actAs [operator, borrower]) do
     createCmd CollateralHolding with
       owner      = borrower
       operator
@@ -73,7 +73,7 @@ initializeLedger = script do
       context = "LoanA-collateral"
 
   -- 4. Create LoanA (signatories: borrower, lenderA)
-  loanACid <- submitMulti [borrower, lenderA] [] do
+  loanACid <- submit (actAs [borrower, lenderA]) do
     createCmd LoanA with
       borrower
       lenderA
@@ -90,3 +90,7 @@ initializeLedger = script do
     lenderBCashCid
     loanACid
     collateralCid = lockedCollateralCid
+
+-- Default initialization with standard 5,000.0 USD-TEST borrower equity
+initializeLedger : Script InitialLedgerState
+initializeLedger = initializeLedgerWithBorrowerCash 5000.0
