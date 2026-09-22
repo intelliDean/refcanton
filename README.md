@@ -82,16 +82,23 @@ A borrower (Alice) refinances an existing loan with an outgoing lender (**Lender
 ├── backend/                     # Backend Gateway & Projection Service
 │   ├── daml-js/                 # Generated TypeScript bindings (daml codegen js)
 │   ├── src/
-│   │   ├── ledger.ts            # Ledger state manager & Canton privacy projection engine
-│   │   └── server.ts            # Express REST API & static frontend server
+│   │   ├── types/               # TypeScript interfaces for ledger domain & responses
+│   │   ├── config/              # Financial parameters and baseline constants
+│   │   ├── services/            # AtomicClosing, CantonPrivacyEngine & LedgerStore
+│   │   ├── routes/              # Express API routers (quotes, offers, closing, state)
+│   │   ├── ledger.ts            # Domain facade coordinating ledger operations
+│   │   └── server.ts            # Express REST server & static web app host
 │   └── package.json
-├── frontend/                    # High-fidelity Web Application
+├── frontend/                    # Modern Web Application
 │   ├── index.html               # Semantic HTML5 layout with Role Switcher & Modals
 │   ├── style.css                # Dark mode design system (glassmorphism, vibrant accents)
-│   └── app.js                   # Interactive client logic with Privacy Inspector & live audit
+│   ├── app.js                   # Application coordinator & event dispatcher
+│   └── js/
+│       ├── api.js               # Centralized async API client
+│       ├── components/          # Toast, Privacy Modal, Audit Log Modal
+│       └── views/               # Borrower, Lender A & Lender B view controllers
 ├── scripts/                     # Developer tooling
-│   ├── generate_bindings.sh     # Daml codegen wrapper script
-│   └── seed-state.sh            # State reset and verification script
+│   └── generate_bindings.sh     # Daml codegen wrapper script
 ├── daml.yaml                    # Daml package definition (SDK 3.4.11)
 ├── package.json                 # Root script runner
 └── README.md                    # This document
