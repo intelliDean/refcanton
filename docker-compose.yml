@@ -1,0 +1,68 @@
+# docker-compose.yml
+# RefCanton — Multi-Participant Canton Cluster & Application Stack
+
+services:
+  # Canton Multi-Participant Cluster:
+  # - 1 Canton Synchronizer (Sequencer + Mediator)
+  # - Participant 1: Alice (Borrower) — Ledger API 5011, HTTP 5014
+  # - Participant 2: LegacyBank (Lender A) — Ledger API 5021, HTTP 5024
+  # - Participant 3: NeoCapital (Lender B) — Ledger API 5031, HTTP 5034
+  canton-network:
+    build:
+      context: ./canton
+      dockerfile: Dockerfile.canton
+    image: refcanton-canton:3.4.11
+    container_name: refcanton-canton-nodes
+    ports:
+      # Synchronizer Domain
+      - "5001:5001" # Sequencer Public API
+      - "5002:5002" # Sequencer Admin API
+      - "5003:5003" # Mediator Admin API
+      # Participant 1 (Alice / Borrower)
+      - "5011:5011" # Ledger API (gRPC)
+      - "5012:5012" # Admin API
+      - "5014:5014" # HTTP JSON Ledger API
+      # Participant 2 (LegacyBank / Lender A)
+      - "5021:5021" # Ledger API (gRPC)
+      - "5022:5022" # Admin API
+      - "5024:5024" # HTTP JSON Ledger API
+      # Participant 3 (NeoCapital / Lender B)
+      - "5031:5031" # Ledger API (gRPC)
+      - "5032:5032" # Admin API
+      - "5034:5034" # HTTP JSON Ledger API
+    volumes:
+      - ./canton/log:/canton/log
+      - ./.daml/dist:/canton/dars:ro
+    restart: unless-stopped
+    networks:
+      - canton-net
+
+  # RefCanton Fullstack Application (Backend Gateway + Web UI)
+  refcanton-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: refcanton-app:latest
+    container_name: refcanton-app-service
+    ports:
+      - "4000:4000"
+    environment:
+      - PORT=4000
+      - NODE_ENV=production
+      - CANTON_HOST=canton-network
+      - CANTON_PARTICIPANT1_HOST=canton-network
+      - CANTON_PARTICIPANT1_PORT=5011
+      - CANTON_PARTICIPANT2_HOST=canton-network
+      - CANTON_PARTICIPANT2_PORT=5021
+      - CANTON_PARTICIPANT3_HOST=canton-network
+      - CANTON_PARTICIPANT3_PORT=5031
+    depends_on:
+      - canton-network
+    restart: unless-stopped
+    networks:
+      - canton-net
+
+networks:
+  canton-net:
+    driver: bridge
+    name: refcanton_network

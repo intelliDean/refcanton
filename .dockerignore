@@ -1,0 +1,10 @@
+.git
+.github
+node_modules
+.daml/
+canton/log/
+*.log
+.env
+.env.local
+scratch/
+ref_canton.txt
