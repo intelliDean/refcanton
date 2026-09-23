@@ -347,12 +347,11 @@ Rule: Pin ALL versions to whatever cn-quickstart ships on Day 1. Document here.
 Do NOT upgrade during the build. If a bug requires upgrade, record date + reason.
 
 Record these after initializing the repo:
-  Daml SDK version:                      [fill in from daml.yaml]
-  daml-finance-holding:                  [fill in]
-  daml-finance-interface-holding:        [fill in]
-  daml-finance-interface-types-common:   [fill in]
-  Canton Docker image tag:               [fill in from docker-compose.yml]
-  Node.js version:                       [fill in from .nvmrc]
+  Daml SDK version:                      3.4.11
+  Canton Version:                        3.4.11 (multi-participant cluster)
+  Canton Docker image tag:               refcanton-canton:3.4.11
+  App Docker image tag:                  refcanton-app:latest
+  Node.js version:                       20-alpine
 
 ---
 

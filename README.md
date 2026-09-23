@@ -221,29 +221,49 @@ In a production Canton deployment, each party operates their own Canton particip
 └──────────────┘       └──────────────┘       └──────────────┘
 ```
 
-### Deploying to Canton LocalNet
-To run with Canton multi-participant nodes locally:
+### Running with Docker Compose (Recommended)
+RefCanton includes a containerized multi-participant Canton cluster and fullstack web application orchestrated via Docker Compose:
+
+```bash
+# Option A: One-touch launcher script
+./scripts/run_docker.sh
+
+# Option B: Standard Docker Compose
+docker compose up --build -d
+```
+
+#### Container Architecture & Ports:
+| Service / Node | Component | Host Port | Protocol | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| **`refcanton-app`** | Web UI & API Gateway | `4000` | HTTP | Fullstack RefCanton application |
+| **`canton-network`** | Sequencer Public | `5001` | gRPC | Canton Synchronizer Sequencer |
+| **`canton-network`** | Sequencer Admin | `5002` | gRPC | Canton Sequencer Admin API |
+| **`canton-network`** | Mediator Admin | `5003` | gRPC | Canton Synchronizer Mediator |
+| **`participant1`** | Borrower (Alice) | `5011` / `5014` | gRPC / HTTP | Isolated node hosting Alice |
+| **`participant2`** | Lender A (LegacyBank) | `5021` / `5024` | gRPC / HTTP | Isolated node hosting Lender A |
+| **`participant3`** | Lender B (NeoCapital) | `5031` / `5034` | gRPC / HTTP | Isolated node hosting Lender B |
+
+#### Management Commands:
+```bash
+# View live logs
+docker compose logs -f
+
+# Check container status
+docker compose ps
+
+# Teardown cluster
+docker compose down
+```
+
+### Manual Host Deployment
+If running Canton directly on your host machine:
 1. Start Canton Console:
    ```bash
-   canton -c canton-local.conf
+   canton -c canton/canton.conf --bootstrap canton/bootstrap.canton
    ```
-2. Upload the DAR to all participants:
-   ```scala
-   val darPath = ".daml/dist/ref-canton-0.0.1.dar"
-   participant1.dars.upload(darPath)
-   participant2.dars.upload(darPath)
-   participant3.dars.upload(darPath)
-   ```
-3. Allocate parties to distinct participants:
-   ```scala
-   val borrower = participant1.parties.enable("Alice")
-   val lenderA = participant2.parties.enable("LegacyBank")
-   val lenderB = participant3.parties.enable("NeoCapital")
-   ```
-4. Set the backend connection URL in `backend/.env`:
-   ```env
-   CANTON_LEDGER_HOST=localhost
-   CANTON_LEDGER_PORT=5011
+2. Start the Application Gateway:
+   ```bash
+   npm start
    ```
 
 ---
