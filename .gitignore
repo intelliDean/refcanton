@@ -10,4 +10,5 @@ dist/
 ref_canton.txt
 canton/bin/
 canton/dars/
+canton/log/
 demo/
