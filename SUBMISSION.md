@@ -5,8 +5,8 @@
 - **Tagline**: Confidential Debt Refinancing with Atomic Collateral Repledging on Canton Network
 - **Track**: Institutional Privacy & DeFi Infrastructure
 - **Hackathon**: HackCanton Season 3 (July 23 – October 21, 2026)
-- **Repository URL**: `https://github.com/ref-canton/ref-canton`
-- **Demo URL**: `http://localhost:4000` (Localhost reproducible)
+- **Repository URL**: `https://github.com/intelliDean/refcanton`
+- **Demo URL**: `http://localhost:4000` (Docker Compose or local)
 
 ---
 
@@ -64,4 +64,6 @@ Our Daml test suite (`daml/TestRefinancing.daml`) passes **7/7 automated scenari
 3. [x] **Role-Based Views**: Borrower, Outgoing Lender A, and Incoming Lender B all have role-tailored dashboards.
 4. [x] **Atomic Collateral Repledge**: Collateral never enters an unlocked state during execution.
 5. [x] **Privacy Demonstration**: Real-time Privacy Inspector proves sub-transaction data redaction between competitors.
-6. [x] **Strict Scope Discipline**: Adheres strictly to single-currency (`USD-TEST`), single-collateral (`COLLAT-TEST`), and fixed negotiated terms without introducing unneeded off-ledger dependencies.
+6. [x] **Interactive Failure Simulator**: Live UI controls to inject borrower equity deficits or expired quotes and verify Canton atomic aborts.
+7. [x] **Containerized Multi-Participant Topology**: 1-click Docker Compose deployment (`./scripts/run_docker.sh`) running 3 isolated participant nodes and a synchronizer domain.
+8. [x] **Strict Scope Discipline**: Adheres strictly to single-currency (`USD-TEST`), single-collateral (`COLLAT-TEST`), and fixed negotiated terms without introducing unneeded off-ledger dependencies.
