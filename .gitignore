@@ -8,3 +8,5 @@ dist/
 .env.local
 *.log
 ref_canton.txt
+canton/bin/
+canton/dars/

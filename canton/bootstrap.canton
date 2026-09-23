@@ -1,0 +1,70 @@
+// canton/bootstrap.canton
+// Canton Console Automated Bootstrap for RefCanton Multi-Participant Topology
+
+import com.digitalasset.canton.config.RequireTypes.PositiveInt
+import com.digitalasset.canton.version.ProtocolVersion
+import java.io.File
+
+println("===================================================================")
+println(" [RefCanton] Initializing Canton Synchronizer Domain & Nodes")
+println("===================================================================")
+
+// 1. Initialize Synchronizer (Sequencer + Mediator)
+val staticSynchronizerParameters = StaticSynchronizerParameters.defaults(
+  sequencer1.config.crypto,
+  ProtocolVersion.forSynchronizer,
+  topologyChangeDelay = NonNegativeFiniteDuration.Zero
+)
+val synchronizerOwners = Seq(sequencer1, mediator1)
+bootstrap.synchronizer("refsynchronizer", Seq(sequencer1), Seq(mediator1), synchronizerOwners, PositiveInt.one, staticSynchronizerParameters)
+
+// 2. Connect Participant Nodes to Synchronizer
+println("[RefCanton] Connecting Participant 1 (Alice / Borrower)...")
+participant1.synchronizers.connect_local(sequencer1, "refsynchronizer")
+
+println("[RefCanton] Connecting Participant 2 (LegacyBank / Lender A)...")
+participant2.synchronizers.connect_local(sequencer1, "refsynchronizer")
+
+println("[RefCanton] Connecting Participant 3 (NeoCapital / Lender B)...")
+participant3.synchronizers.connect_local(sequencer1, "refsynchronizer")
+
+// 3. Upload Compiled RefCanton DAR to all participant nodes
+val possibleDarPaths = Seq(
+  "/canton/dars/ref-canton-0.0.1.dar",
+  "/app/.daml/dist/ref-canton-0.0.1.dar",
+  ".daml/dist/ref-canton-0.0.1.dar"
+)
+val darFile = possibleDarPaths.find(p => new File(p).exists())
+
+darFile match {
+  case Some(path) =>
+    println(s"[RefCanton] Found compiled DAR at: $path")
+    println("[RefCanton] Uploading DAR to participant1, participant2, and participant3...")
+    participant1.dars.upload(path)
+    participant2.dars.upload(path)
+    participant3.dars.upload(path)
+    println("[RefCanton] DAR successfully uploaded across all nodes.")
+  case None =>
+    println("[RefCanton] WARNING: ref-canton-0.0.1.dar not found at expected paths. Skipping auto-upload.")
+}
+
+// 4. Enable Party Identities on Distinct Participant Nodes
+println("[RefCanton] Provisioning Party Identities:")
+val borrower = participant1.parties.enable("Borrower")
+println(s"  ✓ Borrower allocated on Participant 1 (node: ${participant1.id})")
+
+val lenderA = participant2.parties.enable("LenderA")
+println(s"  ✓ LenderA allocated on Participant 2 (node: ${participant2.id})")
+
+val lenderB = participant3.parties.enable("LenderB")
+println(s"  ✓ LenderB allocated on Participant 3 (node: ${participant3.id})")
+
+val operator = participant1.parties.enable("Operator")
+println(s"  ✓ Operator allocated on Participant 1 (node: ${participant1.id})")
+
+println("===================================================================")
+println(" [RefCanton] Multi-Participant Topology Operational!")
+println(s"  - Participant 1 (Borrower): gRPC port ${participant1.config.ledgerApi.port.unwrap}, HTTP port ${participant1.config.httpLedgerApi.port.unwrap}")
+println(s"  - Participant 2 (Lender A): gRPC port ${participant2.config.ledgerApi.port.unwrap}, HTTP port ${participant2.config.httpLedgerApi.port.unwrap}")
+println(s"  - Participant 3 (Lender B): gRPC port ${participant3.config.ledgerApi.port.unwrap}, HTTP port ${participant3.config.httpLedgerApi.port.unwrap}")
+println("===================================================================")
