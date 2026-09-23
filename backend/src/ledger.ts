@@ -265,6 +265,48 @@ export class CantonLedgerState {
       loanB: newLoanB,
     };
   }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // FAILURE SIMULATION HOOKS
+  // ───────────────────────────────────────────────────────────────────────────
+  simulateInsufficientFunds(amount: number = 500.0): void {
+    const cash = this.store.cashHoldings.find(c => c.owner === DEFAULT_PARTIES.BORROWER);
+    if (!cash) throw new Error('Borrower cash holding not found');
+    const oldAmount = cash.amount;
+    cash.amount = amount;
+    this.store.recordTx(
+      DEFAULT_PARTIES.BORROWER,
+      'SIMULATE_INSUFFICIENT_FUNDS',
+      `Simulated borrower liquidity drop from $${oldAmount.toLocaleString()} to $${amount.toLocaleString()} USD-TEST (below $1k equity threshold)`
+    );
+  }
+
+  simulateExpireQuote(): void {
+    const quote = this.store.payoffQuotes[0];
+    if (!quote) throw new Error('No active PayoffQuote to expire');
+    quote.expiresAt = new Date(Date.now() - 3600000).toISOString(); // 1 hour in the past
+    this.store.recordTx(
+      DEFAULT_PARTIES.LENDER_A,
+      'SIMULATE_EXPIRED_QUOTE',
+      `Simulated quote deadline expiry: PayoffQuote ${quote.contractId} expiration set to ${quote.expiresAt}`
+    );
+  }
+
+  resetSimulation(): void {
+    const cash = this.store.cashHoldings.find(c => c.owner === DEFAULT_PARTIES.BORROWER);
+    if (cash && cash.amount < BASELINE_CONFIG.BORROWER_INITIAL_CASH) {
+      cash.amount = BASELINE_CONFIG.BORROWER_INITIAL_CASH;
+    }
+    const quote = this.store.payoffQuotes[0];
+    if (quote) {
+      quote.expiresAt = new Date(Date.now() + 86400000 * BASELINE_CONFIG.QUOTE_EXPIRY_DAYS).toISOString();
+    }
+    this.store.recordTx(
+      'System',
+      'RESET_SIMULATION',
+      'Reset simulation flags: restored borrower cash to normal and refreshed quote validity'
+    );
+  }
 }
 
 export const ledger = new CantonLedgerState();

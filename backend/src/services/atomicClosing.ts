@@ -54,9 +54,18 @@ export class AtomicClosingCoordinator {
       throw new Error('ReplacementOffer not found or already consumed');
     }
 
+    // Expiry check: Canton contract deadline enforcement
+    const nowIso = new Date().toISOString();
+    if (quote.expiresAt < nowIso) {
+      throw new Error(`PayoffQuote ${quote.contractId} has expired (expired at ${quote.expiresAt})`);
+    }
+    if (offer.expiresAt < nowIso) {
+      throw new Error(`ReplacementOffer ${offer.contractId} has expired (expired at ${offer.expiresAt})`);
+    }
+
     const borrowerCash = cashHoldings.find(c => c.contractId === request.borrowerCashCid);
     if (!borrowerCash || borrowerCash.amount < BASELINE_CONFIG.BORROWER_REQUIRED_EQUITY) {
-      throw new Error(`Borrower cash insufficient for $${BASELINE_CONFIG.BORROWER_REQUIRED_EQUITY} equity contribution`);
+      throw new Error(`Borrower cash insufficient for $${BASELINE_CONFIG.BORROWER_REQUIRED_EQUITY} equity contribution (available: $${borrowerCash ? borrowerCash.amount : 0})`);
     }
 
     const lenderBCash = cashHoldings.find(c => c.contractId === offer.lenderBCashCid);
