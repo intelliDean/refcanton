@@ -269,7 +269,7 @@ export async function requestAndExecuteClose(onSuccess) {
     showToast('Refinancing executed! One committed update: Paid A $101k, closed Loan A, repledged collateral, created Loan B.');
     if (onSuccess) onSuccess();
   } catch (err) {
-    showToast(err.message, 'error');
+    showToast(`❌ Canton Atomic Abort: ${err.message}. Atomicity Guarantee: No funds moved, Loan A intact, collateral secured.`, 'error');
     if (btn) {
       btn.disabled = false;
       btn.innerText = '⚡ Execute Atomic Close';

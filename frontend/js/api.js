@@ -99,4 +99,24 @@ export class ApiClient {
       method: 'POST',
     });
   }
+
+  // Failure Mode Simulations
+  static simulateInsufficientFunds(amount = 500.0) {
+    return this.request('/simulation/insufficient-funds', {
+      method: 'POST',
+      body: JSON.stringify({ amount }),
+    });
+  }
+
+  static simulateExpireQuote() {
+    return this.request('/simulation/expire-quote', {
+      method: 'POST',
+    });
+  }
+
+  static resetSimulation() {
+    return this.request('/simulation/reset', {
+      method: 'POST',
+    });
+  }
 }

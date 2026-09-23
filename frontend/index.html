@@ -47,6 +47,9 @@
     </div>
 
     <div class="nav-right">
+      <button class="btn btn-outline" id="simulationBtn" onclick="toggleSimulationModal()">
+        🧪 Failure Simulator
+      </button>
       <button class="btn btn-outline" id="privacyAuditBtn" onclick="togglePrivacyInspector()">
         🛡️ Privacy Inspector
       </button>
@@ -58,6 +61,15 @@
       </button>
     </div>
   </header>
+
+  <!-- Simulation Active Warning Banner -->
+  <div id="simulationActiveBanner" class="simulation-alert-banner" style="display: none;">
+    <div class="simulation-alert-content">
+      <span class="alert-icon">⚠️</span>
+      <span id="simulationActiveText">Active Test Mode</span>
+    </div>
+    <button class="btn btn-sm btn-warning" onclick="triggerResetSimulation()">Reset to Happy Path</button>
+  </div>
 
   <!-- Notification Toast Container -->
   <div id="toastContainer" class="toast-container"></div>
@@ -431,6 +443,65 @@
       <div class="modal-body">
         <div class="tx-list" id="txListContainer">
           <!-- Injected dynamically -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Failure Simulator Modal -->
+  <div class="modal-backdrop" id="simulationModal" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title">🧪 Canton Atomicity Failure Modes Simulator</h3>
+        <button class="modal-close-btn" onclick="toggleSimulationModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">
+          Test Canton's atomic transaction all-or-nothing guarantee. In traditional multi-step refinancing, unexpected lender or borrower defaults midway leave assets trapped or liens in limbo. Canton guarantees that if any pre-condition fails, the transaction aborts with <strong>zero side effects</strong>: no cash moves, Loan A remains intact, and no collateral is released.
+        </p>
+
+        <div class="sim-grid">
+          <!-- Scenario 1 -->
+          <div class="sim-card">
+            <div class="sim-card-header">
+              <span class="sim-badge badge-fail">Scenario 1</span>
+              <h4>Insufficient Borrower Equity</h4>
+            </div>
+            <p>
+              Simulates Borrower (Alice) having only <strong>$500.00</strong> in cash balance instead of the required <strong>$1,000.00</strong> equity contribution.
+            </p>
+            <button class="btn btn-danger btn-sm" onclick="triggerInsufficientFunds()">
+              Inject Insufficient Cash ($500)
+            </button>
+          </div>
+
+          <!-- Scenario 2 -->
+          <div class="sim-card">
+            <div class="sim-card-header">
+              <span class="sim-badge badge-fail">Scenario 2</span>
+              <h4>Expired Payoff Quote</h4>
+            </div>
+            <p>
+              Simulates the Payoff Quote from Lender A expiring before execution (setting expiry timestamp to the past). Daml ledger time assertion fails.
+            </p>
+            <button class="btn btn-warning btn-sm" onclick="triggerExpireQuote()">
+              Expire Payoff Quote
+            </button>
+          </div>
+
+          <!-- Scenario 3 -->
+          <div class="sim-card">
+            <div class="sim-card-header">
+              <span class="sim-badge badge-restore">Happy Path</span>
+              <h4>Restore Valid Ledger State</h4>
+            </div>
+            <p>
+              Restores Borrower cash back to <strong>$1,000.00</strong> and refreshes the quote expiry to allow atomic settlement to complete successfully.
+            </p>
+            <button class="btn btn-emerald btn-sm" onclick="triggerResetSimulation()">
+              Reset to Happy Path
+            </button>
+          </div>
         </div>
       </div>
     </div>

@@ -1041,3 +1041,110 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* Simulation Alert Banner */
+.simulation-alert-banner {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.15), rgba(18, 25, 38, 0.95));
+  border-bottom: 1px solid rgba(245, 158, 11, 0.4);
+  padding: 0.65rem 1.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #fff;
+  font-size: 0.88rem;
+  z-index: 90;
+  animation: fadeIn 0.3s ease;
+}
+
+.simulation-alert-content {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.alert-icon {
+  font-size: 1.1rem;
+}
+
+/* Simulation Modal Grid */
+.sim-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+  margin-top: 1.25rem;
+}
+
+.sim-card {
+  background: rgba(18, 25, 38, 0.7);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 0.85rem;
+  transition: all 0.2s ease;
+}
+
+.sim-card:hover {
+  border-color: var(--border-active);
+  transform: translateY(-2px);
+}
+
+.sim-card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.sim-card-header h4 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #fff;
+  margin: 0;
+}
+
+.sim-card p {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  margin: 0;
+}
+
+.sim-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  width: fit-content;
+}
+
+.badge-fail {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.badge-restore {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.btn-emerald {
+  background: #10b981;
+  color: #fff;
+  border: none;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  padding: 0.45rem 0.9rem;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.btn-emerald:hover {
+  background: #059669;
+}

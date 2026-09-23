@@ -5,6 +5,12 @@ import { ApiClient } from './js/api.js';
 import { showToast } from './js/components/toast.js';
 import { togglePrivacyInspector } from './js/components/privacyModal.js';
 import { toggleTxModal } from './js/components/auditModal.js';
+import {
+  toggleSimulationModal,
+  triggerInsufficientFunds,
+  triggerExpireQuote,
+  triggerResetSimulation,
+} from './js/components/simulationModal.js';
 import { renderBorrowerView, requestAndExecuteClose } from './js/views/borrowerView.js';
 import { renderLenderAView, issuePayoffQuote, withdrawPayoffQuote } from './js/views/lenderAView.js';
 import { renderLenderBView, issueReplacementOffer, withdrawReplacementOffer } from './js/views/lenderBView.js';
@@ -17,6 +23,10 @@ let pollInterval = null;
 window.setRole = setRole;
 window.togglePrivacyInspector = togglePrivacyInspector;
 window.toggleTxModal = toggleTxModal;
+window.toggleSimulationModal = toggleSimulationModal;
+window.triggerInsufficientFunds = () => triggerInsufficientFunds(fetchState);
+window.triggerExpireQuote = () => triggerExpireQuote(fetchState);
+window.triggerResetSimulation = () => triggerResetSimulation(fetchState);
 window.issuePayoffQuote = () => issuePayoffQuote(fetchState);
 window.withdrawPayoffQuote = () => withdrawPayoffQuote(fetchState);
 window.issueReplacementOffer = () => issueReplacementOffer(fetchState);
