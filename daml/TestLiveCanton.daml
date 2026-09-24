@@ -1,0 +1,75 @@
+-- TestLiveCanton.daml
+-- Ref Canton: Live Canton Ledger Execution Script (Wall-Clock Mode)
+-- Executes full atomic refinancing on running Canton participant nodes without setTime
+
+module TestLiveCanton where
+
+import Daml.Script
+import DA.Date (date, Month(..))
+import DA.Time (addRelTime, days)
+import Assets
+import Loan ()
+import Approvals
+import Closing
+import Setup (TestParties(..), initializeLedger)
+
+runLiveRefinancing : Script ()
+runLiveRefinancing = script do
+  now <- getTime
+  let tExpiry = addRelTime now (days 2)
+
+  state <- initializeLedger
+  let TestParties{operator, borrower, lenderA, lenderB} = state.parties
+
+  -- 1. Issue Approvals
+  payoffQuoteCid <- submit lenderA do
+    createCmd PayoffQuote with
+      lenderA
+      borrower
+      loanACid     = state.loanACid
+      payoffAmount = 101000.0
+      instrument   = "USD-TEST"
+      expiresAt    = tExpiry
+
+  allocatedLenderBCashCid <- submit lenderB do
+    exerciseCmd state.lenderBCashCid Allocate with
+      forParty = borrower
+
+  replacementOfferCid <- submit lenderB do
+    createCmd ReplacementOffer with
+      lenderB
+      borrower
+      operator
+      newPrincipal         = 100000.0
+      maturityDate         = date 2029 Dec 31
+      collateralInstrument = "COLLAT-TEST"
+      collateralUnits      = 150.0
+      lenderBCashCid       = allocatedLenderBCashCid
+      cashInstrument       = "USD-TEST"
+      expiresAt            = tExpiry
+      capRate              = 0.075
+      amortizationPeriods  = 24
+
+  -- 2. Borrower creates and executes ClosingRequest
+  closingRequestCid <- submit borrower do
+    createCmd ClosingRequest with
+      borrower
+      lenderA
+      lenderB
+      operator
+      payoffQuoteCid
+      replacementOfferCid
+      borrowerCashCid     = state.borrowerCashCid
+      loanACid            = state.loanACid
+      collateralCid       = state.collateralCid
+
+  receiptCid <- submit borrower do
+    exerciseCmd closingRequestCid Execute
+
+  Some rc <- queryContractId borrower receiptCid
+  debug ("=== CANTON LIVE CLOSING TRANSACTION COMMITTED SUCCESSFULLY ===")
+  debug ("Receipt Contract ID:", receiptCid)
+  debug ("New Loan B Principal:", rc.receipt.newPrincipal)
+  debug ("Payoff Amount:", rc.receipt.payoffAmount)
+  debug ("Borrower Contribution:", rc.receipt.borrowerContribution)
+  debug ("Collateral Units Secured to Lender B:", rc.receipt.collateralUnits)

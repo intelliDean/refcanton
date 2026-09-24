@@ -14,7 +14,7 @@ import Daml.Script
 import DA.Date (date, Month(..))
 import DA.Time (time)
 import Assets
-import Loan ()
+import Loan
 import Approvals
 import Closing
 import Setup (TestParties(..), InitialLedgerState(..), initializeLedger, initializeLedgerWithBorrowerCash)
@@ -321,3 +321,248 @@ testBorrowerCancelFails = script do
   -- Execution must fail because closing request was cancelled and archived
   submitMustFail borrower do
     exerciseCmd closingRequestCid Execute
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 3. EVIDENCE TESTS: UNAUTHORIZED RELEASE, WRONG ASSETS, REPLAY, AND PRIVACY
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- 3.1: Unauthorized Collateral Release:
+-- Proves that neither borrower, incoming lender (lenderB), nor operator can unlock
+-- or repledge collateral pledged to lenderA without lenderA's explicit authorization.
+testUnauthorizedCollateralReleaseFails : Script ()
+testUnauthorizedCollateralReleaseFails = script do
+  state <- initializeLedger
+  let TestParties{operator, borrower, lenderA, lenderB} = state.parties
+
+  -- Verify initial state: collateral is locked to lenderA
+  Some lockedCollat <- queryContractId borrower state.collateralCid
+  assert (lockedCollat.locker == lenderA)
+  assert (lockedCollat.amount == 150.0)
+
+  -- A. Borrower attempts direct Unlock (must fail authorization)
+  submitMustFail borrower do
+    exerciseCmd state.collateralCid Unlock
+
+  -- B. Borrower attempts direct Repledge to lenderB (must fail authorization)
+  submitMustFail borrower do
+    exerciseCmd state.collateralCid Repledge with
+      newLocker  = lenderB
+      newContext = "Malicious-Repledge"
+
+  -- C. LenderB attempts direct Unlock (must fail authorization)
+  submitMustFail lenderB do
+    exerciseCmd state.collateralCid Unlock
+
+  -- D. LenderB attempts direct Repledge to themselves (must fail authorization)
+  submitMustFail lenderB do
+    exerciseCmd state.collateralCid Repledge with
+      newLocker  = lenderB
+      newContext = "LenderB-Theft"
+
+  -- E. Operator attempts direct Unlock (must fail authorization)
+  submitMustFail operator do
+    exerciseCmd state.collateralCid Unlock
+
+  -- Collateral remains safely locked to LenderA
+  Some stillLocked <- queryContractId lenderA state.collateralCid
+  assert (stillLocked.locker == lenderA)
+
+
+-- 3.2: Wrong Asset Identifiers:
+-- Proves that attempting to settle with counterfeit or mismatched cash/collateral instruments aborts.
+testWrongAssetFails : Script ()
+testWrongAssetFails = script do
+  let t0 = time (date 2026 Jul 25) 10 0 0
+  let tExpiry = time (date 2026 Jul 26) 18 0 0
+  setTime t0
+
+  state <- initializeLedger
+  let TestParties{operator, borrower, lenderA, lenderB} = state.parties
+
+  -- Scenario A: Borrower passes counterfeit cash ("USD-COUNTERFEIT")
+  fakeBorrowerCashCid <- submit operator do
+    createCmd CashHolding with
+      owner        = borrower
+      operator
+      instrument   = "USD-COUNTERFEIT"
+      amount       = 5000.0
+      allocatedFor = None
+
+  approvalsA <- setupApprovals state.parties state tExpiry
+
+  closingRequestFakeCash <- submit borrower do
+    createCmd ClosingRequest with
+      borrower
+      lenderA
+      lenderB
+      operator
+      payoffQuoteCid      = approvalsA.payoffQuoteCid
+      replacementOfferCid = approvalsA.replacementOfferCid
+      borrowerCashCid     = fakeBorrowerCashCid
+      loanACid            = state.loanACid
+      collateralCid       = state.collateralCid
+
+  -- Closing must fail because borrower cash instrument is not USD-TEST
+  submitMustFail borrower do
+    exerciseCmd closingRequestFakeCash Execute
+
+  -- Scenario B: LenderB offers counterfeit cash ("EUR-TEST")
+  fakeLenderBCashCid <- submit operator do
+    createCmd CashHolding with
+      owner        = lenderB
+      operator
+      instrument   = "EUR-TEST"
+      amount       = 100000.0
+      allocatedFor = None
+
+  allocatedFakeCash <- submit lenderB do
+    exerciseCmd fakeLenderBCashCid Allocate with forParty = borrower
+
+  badOfferCid <- submit lenderB do
+    createCmd ReplacementOffer with
+      lenderB
+      borrower
+      operator
+      newPrincipal         = 100000.0
+      maturityDate         = date 2028 Jul 25
+      collateralInstrument = "COLLAT-TEST"
+      collateralUnits      = 150.0
+      lenderBCashCid       = allocatedFakeCash
+      cashInstrument       = "EUR-TEST"
+      expiresAt            = tExpiry
+      capRate              = 0.075
+      amortizationPeriods  = 24
+
+  closingRequestBadOffer <- submit borrower do
+    createCmd ClosingRequest with
+      borrower
+      lenderA
+      lenderB
+      operator
+      payoffQuoteCid      = approvalsA.payoffQuoteCid
+      replacementOfferCid = badOfferCid
+      borrowerCashCid     = state.borrowerCashCid
+      loanACid            = state.loanACid
+      collateralCid       = state.collateralCid
+
+  -- Closing must fail because replacement offer cash instrument is not USD-TEST
+  submitMustFail borrower do
+    exerciseCmd closingRequestBadOffer Execute
+
+
+-- 3.3: Replay Attack:
+-- Proves that once an atomic closing executes, neither the ClosingRequest nor the consumed
+-- approval contracts can be replayed or double-spent.
+testReplayAttackFails : Script ()
+testReplayAttackFails = script do
+  let t0 = time (date 2026 Jul 25) 10 0 0
+  let tExpiry = time (date 2026 Jul 26) 18 0 0
+  setTime t0
+
+  state <- initializeLedger
+  let TestParties{operator, borrower, lenderA, lenderB} = state.parties
+
+  approvals <- setupApprovals state.parties state tExpiry
+
+  closingRequestCid <- submit borrower do
+    createCmd ClosingRequest with
+      borrower
+      lenderA
+      lenderB
+      operator
+      payoffQuoteCid      = approvals.payoffQuoteCid
+      replacementOfferCid = approvals.replacementOfferCid
+      borrowerCashCid     = state.borrowerCashCid
+      loanACid            = state.loanACid
+      collateralCid       = state.collateralCid
+
+  -- 1. Execute first atomic closing (succeeds)
+  receiptCid <- submit borrower do
+    exerciseCmd closingRequestCid Execute
+
+  Some _ <- queryContractId borrower receiptCid
+
+  -- 2. REPLAY ATTACK ATTEMPT 1: Re-executing the already consumed ClosingRequest
+  submitMustFail borrower do
+    exerciseCmd closingRequestCid Execute
+
+  -- 3. REPLAY ATTACK ATTEMPT 2: Attempting to execute a second ClosingRequest using
+  -- already-consumed PayoffQuote and ReplacementOffer
+  replayedClosingRequestCid <- submit borrower do
+    createCmd ClosingRequest with
+      borrower
+      lenderA
+      lenderB
+      operator
+      payoffQuoteCid      = approvals.payoffQuoteCid
+      replacementOfferCid = approvals.replacementOfferCid
+      borrowerCashCid     = state.borrowerCashCid
+      loanACid            = state.loanACid
+      collateralCid       = state.collateralCid
+
+  -- Replay execution must fail because approval contracts and loans are already consumed and archived
+  submitMustFail borrower do
+    exerciseCmd replayedClosingRequestCid Execute
+
+
+-- 3.4: Privacy Checks with Separate Lender Credentials & Transaction History:
+-- Proves asymmetric contract visibility: LenderA queries return 0 results for LenderB's
+-- terms, and LenderB queries return 0 results for LenderA's terms.
+testPrivacyWithSeparateLenderCredentials : Script ()
+testPrivacyWithSeparateLenderCredentials = script do
+  let t0 = time (date 2026 Jul 25) 10 0 0
+  let tExpiry = time (date 2026 Jul 26) 18 0 0
+  setTime t0
+
+  state <- initializeLedger
+  let TestParties{operator, borrower, lenderA, lenderB} = state.parties
+
+  approvals <- setupApprovals state.parties state tExpiry
+
+  -- Prior to close:
+  -- LenderA sees PayoffQuote, LoanA.
+  lenderAPayoffQuotes <- queryFilter @PayoffQuote lenderA (\q -> q.lenderA == lenderA)
+  assert (length lenderAPayoffQuotes == 1)
+
+  -- LenderA CANNOT see ReplacementOffer (must be 0 results)
+  lenderAOffers <- queryFilter @ReplacementOffer lenderA (\_ -> True)
+  assertMsg "Privacy breach: LenderA queried ReplacementOffer" (null lenderAOffers)
+
+  -- LenderB sees ReplacementOffer.
+  lenderBOffers <- queryFilter @ReplacementOffer lenderB (\o -> o.lenderB == lenderB)
+  assert (length lenderBOffers == 1)
+
+  -- LenderB CANNOT see PayoffQuote (must be 0 results)
+  lenderBQuotes <- queryFilter @PayoffQuote lenderB (\_ -> True)
+  assertMsg "Privacy breach: LenderB queried PayoffQuote" (null lenderBQuotes)
+
+  -- LenderB CANNOT see LoanA (must be 0 results)
+  lenderBLoanA <- queryFilter @LoanA lenderB (\_ -> True)
+  assertMsg "Privacy breach: LenderB queried LoanA" (null lenderBLoanA)
+
+  -- Execute atomic closing
+  closingRequestCid <- submit borrower do
+    createCmd ClosingRequest with
+      borrower
+      lenderA
+      lenderB
+      operator
+      payoffQuoteCid      = approvals.payoffQuoteCid
+      replacementOfferCid = approvals.replacementOfferCid
+      borrowerCashCid     = state.borrowerCashCid
+      loanACid            = state.loanACid
+      collateralCid       = state.collateralCid
+
+  _ <- submit borrower do
+    exerciseCmd closingRequestCid Execute
+
+  -- Post-close Privacy Inspection:
+  -- LenderA STILL cannot see LoanB
+  lenderALoanB <- queryFilter @LoanB lenderA (\_ -> True)
+  assertMsg "Privacy breach: LenderA queried LoanB post-close" (null lenderALoanB)
+
+  -- LenderB STILL cannot see LoanA historical terms
+  lenderBLoanAPost <- queryFilter @LoanA lenderB (\_ -> True)
+  assertMsg "Privacy breach: LenderB queried LoanA post-close" (null lenderBLoanAPost)
+

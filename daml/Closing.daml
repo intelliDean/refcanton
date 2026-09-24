@@ -72,16 +72,21 @@ template ClosingRequest
     choice Execute : ContractId ClosingReceiptContract
       controller borrower
       do
-        -- Step 1: Verify borrower has required 1,000 contribution
+        -- Step 1: Verify borrower has required 1,000 contribution and valid instrument
         borrowerCash <- fetch borrowerCashCid
         assertMsg "Borrower cash insufficient (need 1,000 USD-TEST)"
           (borrowerCash.amount >= 1000.0)
+        assertMsg "Borrower cash instrument must be USD-TEST"
+          (borrowerCash.instrument == "USD-TEST")
 
-        -- Step 2: Validate both approval contracts and reconcile numbers
+        -- Step 2: Validate both approval contracts, instruments, and reconcile numbers
         quote <- fetch payoffQuoteCid
         offer <- fetch replacementOfferCid
         assertMsg "Payoff quote lender mismatch" (quote.lenderA == lenderA)
         assertMsg "Replacement offer lender mismatch" (offer.lenderB == lenderB)
+        assertMsg "Payoff quote instrument must be USD-TEST" (quote.instrument == "USD-TEST")
+        assertMsg "Replacement offer cash instrument must be USD-TEST" (offer.cashInstrument == "USD-TEST")
+        assertMsg "Replacement offer collateral instrument must be COLLAT-TEST" (offer.collateralInstrument == "COLLAT-TEST")
         assertMsg "Reconciliation: B's principal + borrower 1,000 == A's payoff"
           (offer.newPrincipal + 1000.0 == quote.payoffAmount)
         assertMsg "Collateral match: offer matches loan collateral units"
