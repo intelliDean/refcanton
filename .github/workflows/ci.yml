@@ -8,7 +8,7 @@ on:
 
 jobs:
   verify:
-    name: Build & Test Verification
+    name: Build, Security & Integration Verification
     runs-on: ubuntu-latest
 
     steps:
@@ -37,11 +37,11 @@ jobs:
         run: |
           daml version
 
-      - name: Compile Daml Smart Contracts
+      - name: Compile Daml Smart Contracts (.dar)
         run: |
           npm run daml:build
 
-      - name: Run Daml Verification Test Suite
+      - name: Run Daml Contract Test Suite (17 Integration & Regression Tests)
         run: |
           npm test
 
@@ -53,11 +53,19 @@ jobs:
         run: |
           npm run backend:build
 
-      - name: Test Server Boot & Endpoint Check
+      - name: Run Backend Security & Access Control Regression Tests
         run: |
-          node backend/dist/server.js &
-          SERVER_PID=$!
-          sleep 3
-          curl --fail http://localhost:4000/api/status || exit 1
-          curl --fail http://localhost:4000/api/state/Borrower || exit 1
-          kill $SERVER_PID
+          npm run backend:test
+
+      - name: Start Canton & Backend Stack with Docker Compose
+        run: |
+          ./scripts/run_docker.sh
+
+      - name: Execute End-to-End Refinancing API Test
+        run: |
+          ./scripts/test_live_api_closing.sh
+
+      - name: Teardown Docker Compose
+        if: always()
+        run: |
+          docker compose down

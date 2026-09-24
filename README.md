@@ -2,7 +2,8 @@
 > *Sub-Transaction Privacy & Atomic Collateral Repledging on Canton Network & Daml*
 
 [![CI](https://github.com/intelliDean/refcanton/actions/workflows/ci.yml/badge.svg)](https://github.com/intelliDean/refcanton/actions/workflows/ci.yml)
-[![Daml Tests](https://img.shields.io/badge/Daml%20Tests-14%20Passed%20(100%25)-brightgreen.svg)]()
+[![Daml Tests](https://img.shields.io/badge/Daml%20Tests-17%20Passed%20(100%25)-brightgreen.svg)]()
+[![Backend Tests](https://img.shields.io/badge/Backend%20Tests-5%20Suites%20Passed-brightgreen.svg)]()
 [![Canton Evidence](https://img.shields.io/badge/Canton%20Evidence-Verified%20Update%20ID-blue.svg)](EVIDENCE.md)
 [![Daml SDK](https://img.shields.io/badge/Daml%20SDK-3.4.11-blue.svg)]()
 [![Canton](https://img.shields.io/badge/Canton-Network%20Enabled-blueviolet.svg)]()
@@ -130,24 +131,35 @@ npm run daml:build
 ```
 
 ### Step 3: Run the Automated Test Suite
-Execute the 7 verification tests:
+Execute the Daml contract tests and backend security regression suite:
 ```bash
 npm test
 ```
-**Test Coverage Includes:**
-- `initializeLedger`: Initial contract instantiation.
-- `testRefinancingLifecycle`: Complete happy-path atomic swap and balance verification.
-- `testInsufficientBorrowerFundsFails`: Fails if borrower lacks the $1,000 equity contribution.
-- `testExpiredApprovalFails`: Fails if executed past payoff quote expiry timestamp.
-- `testQuoteRevocationFails`: Fails if Lender A revokes the payoff quote before execution.
-- `testOfferWithdrawalFails`: Fails if Lender B withdraws the replacement offer.
-- `testBorrowerCancelFails`: Fails if borrower cancels the closing request.
+**Test Coverage Includes (17 Daml Tests + 5 Backend Security Suites):**
+- **Smart Contract Security & Invariants**:
+  - `testRefinancingLifecycle`: Complete happy-path atomic swap and balance verification.
+  - `testUnauthorizedCollateralReleaseFails`: Rejects attempts to unlock collateral without lender authorization.
+  - `testPaymentFreeReleaseFails`: Rejects collateral release through quotes if payment cash is omitted.
+  - `testWrongAssetFails`: Rejects settlement when counterfeit or unexpected asset instruments are used.
+  - `testCorrectAssetNameWrongIssuerFails`: Rejects tokens matching the asset symbol but minted by an unauthorized operator.
+  - `testExcessFundingReturnsChange`: Verifies excess cash disbursed by Lender B is returned as change via `TransferPartial`.
+  - `testCollateralReuseWithFreshOffersFails`: Prevents multiple loans from securing against the same collateral.
+  - `testReplayAttackFails`: Ensures double-spend and replay attacks on archived contracts fail immediately.
+  - `testExpiredApprovalFails` & `testInsufficientBorrowerFundsFails`: Enforces deadlines and equity requirements.
+  - `testQuoteRevocationFails`, `testOfferWithdrawalFails`, `testBorrowerCancelFails`: Choice authorization rules.
+  - `auditParticipant2` & `auditParticipant3`: Multi-participant sub-transaction privacy assertions.
+- **Backend API & Authentication Tests**:
+  - HTTP 401 unauthenticated request rejection across all endpoints.
+  - HTTP 403 cross-party snooping rejection (e.g. Borrower accessing Lender A state).
+  - Authenticated party-isolated transaction history filtering.
+  - HTTP 503 fail-closed rejection when Canton ledger nodes are offline.
 
-### Step 4: Install Dependencies & Build Backend
+### Step 4: Run Live Canton API Integration & Privacy Test
+With the cluster running, execute the end-to-end integration test through the HTTP API Gateway:
 ```bash
-npm run backend:install
-npm run backend:build
+./scripts/test_live_api_closing.sh
 ```
+This tests genuine authentication, quote issuance, offer commitment, atomic closing on Canton returning a committed `updateId`, and verifies post-closing privacy across isolated lender sessions.
 
 ### Step 5: Start the Application
 ```bash
@@ -266,6 +278,12 @@ If running Canton directly on your host machine:
    ```bash
    npm start
    ```
+
+### Demonstration Video Walkthrough
+An end-to-end MP4 demonstration video walking through the full lifecycle — borrower onboarding, quote and offer commitments, atomic execution on Canton, privacy inspector verification, and failure modes — is available locally in the repository:
+- **Path**: [`demo/refcanton_master_walkthrough.mp4`](file:///mnt/data/Projects/ref_canton/demo/refcanton_master_walkthrough.mp4)
+- **Format**: MP4 (1080p, H.264)
+- **Content**: Complete 3-party workflow showing role switching, atomic settlement with Canton update ID, and live privacy validation across lender views.
 
 ---
 

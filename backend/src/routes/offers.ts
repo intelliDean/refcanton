@@ -1,15 +1,19 @@
 // backend/src/routes/offers.ts
-import { Router, Request, Response } from 'express';
+import { Router, Response } from 'express';
 import { ledger } from '../ledger';
+import { authMiddleware, requireParty, AuthenticatedRequest } from '../middleware/auth';
+import { DEFAULT_PARTIES } from '../config/constants';
 
 export const offersRouter = Router();
 
+offersRouter.use(authMiddleware);
+
 // Lender B: Issue Replacement Offer & Allocate Cash
-offersRouter.post('/create', (req: Request, res: Response) => {
+offersRouter.post('/create', requireParty(DEFAULT_PARTIES.LENDER_B), (req: AuthenticatedRequest, res: Response) => {
   try {
+    const lenderB = req.authenticatedParty || DEFAULT_PARTIES.LENDER_B;
     const {
-      lenderB = 'LenderB',
-      borrower = 'Borrower',
+      borrower = DEFAULT_PARTIES.BORROWER,
       newPrincipal = 100000.0,
       capRate = 0.075,
       amortizationPeriods = 24,
@@ -29,9 +33,10 @@ offersRouter.post('/create', (req: Request, res: Response) => {
 });
 
 // Lender B: Withdraw Replacement Offer & Deallocate Cash
-offersRouter.post('/withdraw', (req: Request, res: Response) => {
+offersRouter.post('/withdraw', requireParty(DEFAULT_PARTIES.LENDER_B), (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { offerId, lenderB = 'LenderB' } = req.body;
+    const lenderB = req.authenticatedParty || DEFAULT_PARTIES.LENDER_B;
+    const { offerId } = req.body;
     ledger.withdrawReplacementOffer(offerId, lenderB);
     res.json({ success: true });
   } catch (error: any) {

@@ -69,6 +69,15 @@ template LockedCollateralHolding
           locker  = newLocker
           context = newContext
 
+    -- Bind collateral to a specific loan facility, consuming the existing holding
+    -- Enforces: collateral cannot be pledged to multiple loans or reused with fresh offers.
+    choice BindToLoan : ContractId LockedCollateralHolding
+      with
+        loanContext : Text
+      controller locker
+      do
+        create this with context = loanContext
+
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- CASH HOLDING

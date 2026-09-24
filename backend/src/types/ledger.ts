@@ -48,6 +48,9 @@ export interface PayoffQuote {
   contractId: string;
   lenderA: string;
   borrower: string;
+  expectedOperator?: string;
+  expectedRecipient?: string;
+  expectedLocker?: string;
   loanACid: string;
   payoffAmount: number;
   instrument: string;
@@ -59,6 +62,7 @@ export interface ReplacementOffer {
   lenderB: string;
   borrower: string;
   operator: string;
+  expectedRecipient?: string;
   newPrincipal: number;
   maturityDate: string;
   collateralInstrument: string;
@@ -70,22 +74,53 @@ export interface ReplacementOffer {
   amortizationPeriods: number; // PRIVATE to Lender B & Borrower
 }
 
-export interface ClosingReceipt {
-  loanBCid: string;
+export interface LenderAPayoffReceipt {
+  contractId: string;
+  borrower: string;
+  lenderA: string;
+  loanACid: string;
+  payoffAmount: number;
+  collateralUnitsReleased: number;
   closedAt: string;
+}
+
+export interface LenderBFundingReceipt {
+  contractId: string;
+  borrower: string;
+  lenderB: string;
+  loanBCid: string;
+  principalFunded: number;
+  collateralUnitsSecured: number;
+  closedAt: string;
+}
+
+export interface BorrowerClosingReceipt {
+  contractId: string;
+  borrower: string;
+  loanACid: string;
+  loanBCid: string;
   payoffAmount: number;
   newPrincipal: number;
   borrowerContribution: number;
   collateralUnits: number;
+  closedAt: string;
 }
 
+// Backward-compatible alias for UI components
 export interface ClosingReceiptContract {
   contractId: string;
   borrower: string;
   lenderA: string;
   lenderB: string;
   operator: string;
-  receipt: ClosingReceipt;
+  receipt: {
+    loanBCid: string;
+    closedAt: string;
+    payoffAmount: number;
+    newPrincipal: number;
+    borrowerContribution: number;
+    collateralUnits: number;
+  };
 }
 
 export interface ClosingRequest {
@@ -129,12 +164,20 @@ export interface PartyLedgerState {
   replacementOffers: ReplacementOffer[];
   closingRequests: ClosingRequest[];
   receipts: ClosingReceiptContract[];
+  receiptA?: LenderAPayoffReceipt;
+  receiptB?: LenderBFundingReceipt;
+  receiptBorrower?: BorrowerClosingReceipt;
   privacyAudits: PrivacyAudits;
 }
 
 export interface AtomicCloseResult {
   success: boolean;
+  updateId: string;
   transactionId: string;
-  receipt: ClosingReceiptContract;
-  loanB: LoanB;
+  synchronizerId?: string;
+  receiptA?: LenderAPayoffReceipt;
+  receiptB?: LenderBFundingReceipt;
+  receiptBorrower?: BorrowerClosingReceipt;
+  receipt?: ClosingReceiptContract;
+  loanB?: LoanB;
 }

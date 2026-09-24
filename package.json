@@ -8,6 +8,7 @@
     "daml:codegen": "PATH=\"$HOME/.daml/bin:$PATH\" daml codegen js .daml/dist/ref-canton-0.0.1.dar -o backend/daml-js",
     "backend:install": "npm --prefix backend install",
     "backend:build": "npm --prefix backend run build",
+    "backend:test": "npm --prefix backend test",
     "start": "node backend/dist/server.js",
     "test": "PATH=\"$HOME/.daml/bin:$PATH\" daml test",
     "docker:up": "./scripts/run_docker.sh",

@@ -1,16 +1,27 @@
 # Dockerfile
-# Production Container for RefCanton Gateway & Web Application
+# Production Container for RefCanton Gateway & Web Application (Multi-Stage Build)
 
+# Stage 1: Build TypeScript backend
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY backend/package*.json ./backend/
+RUN cd backend && npm install
+COPY backend/src ./backend/src
+COPY backend/tsconfig.json ./backend/
+RUN cd backend && npm run build
+
+# Stage 2: Production runtime image
 FROM node:20-alpine
-
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=4000
 
-# Copy pre-compiled backend and runtime dependencies
-COPY backend/package.json ./backend/package.json
-COPY backend/node_modules ./backend/node_modules
-COPY backend/dist ./backend/dist
+# Install production dependencies only
+COPY backend/package*.json ./backend/
+RUN cd backend && npm install --omit=dev
+
+# Copy compiled backend output from builder stage
+COPY --from=builder /app/backend/dist ./backend/dist
 
 # Copy static frontend assets
 COPY frontend ./frontend

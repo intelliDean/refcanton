@@ -5,12 +5,12 @@
 -- 2. 150 COLLAT-TEST units locked to LenderA securing LoanA (101,000 principal).
 -- 3. Borrower has 5,000 USD-TEST cash (will contribute 1,000).
 -- 4. LenderB has 100,000 USD-TEST cash ready to deploy.
--- See DECISIONS.md D1, D2, D9.
 
 module Setup where
 
 import Daml.Script
 import DA.Date (date, Month(..))
+import DA.Text (isPrefixOf)
 import Assets
 import Loan
 
@@ -31,13 +31,21 @@ data InitialLedgerState = InitialLedgerState
     collateralCid   : ContractId LockedCollateralHolding
   deriving (Eq, Show)
 
+-- Resolves existing allocated party by hint/prefix or allocates if not found
+getOrAllocateParty : Text -> Script Party
+getOrAllocateParty partyHint = do
+  known <- listKnownParties
+  case find (\p -> isPrefixOf partyHint (partyToText p.party)) known of
+    Some p -> return p.party
+    None -> allocateParty partyHint
+
 -- Allocates test parties and sets up starting contracts with customizable borrower cash
 initializeLedgerWithBorrowerCash : Decimal -> Script InitialLedgerState
 initializeLedgerWithBorrowerCash borrowerCashAmount = script do
-  operator <- allocateParty "Operator"
-  borrower <- allocateParty "Borrower"
-  lenderA  <- allocateParty "LenderA"
-  lenderB  <- allocateParty "LenderB"
+  operator <- getOrAllocateParty "Operator"
+  borrower <- getOrAllocateParty "Borrower"
+  lenderA  <- getOrAllocateParty "LenderA"
+  lenderB  <- getOrAllocateParty "LenderB"
 
   let parties = TestParties with operator; borrower; lenderA; lenderB
 

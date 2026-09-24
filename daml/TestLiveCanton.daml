@@ -13,7 +13,15 @@ import Approvals
 import Closing
 import Setup (TestParties(..), initializeLedger)
 
-runLiveRefinancing : Script ()
+data LiveClosingResult = LiveClosingResult
+  with
+    parties         : TestParties
+    receiptA        : ContractId LenderAPayoffReceipt
+    receiptB        : ContractId LenderBFundingReceipt
+    receiptBorrower : ContractId BorrowerClosingReceipt
+  deriving (Eq, Show)
+
+runLiveRefinancing : Script LiveClosingResult
 runLiveRefinancing = script do
   now <- getTime
   let tExpiry = addRelTime now (days 2)
@@ -26,10 +34,13 @@ runLiveRefinancing = script do
     createCmd PayoffQuote with
       lenderA
       borrower
-      loanACid     = state.loanACid
-      payoffAmount = 101000.0
-      instrument   = "USD-TEST"
-      expiresAt    = tExpiry
+      expectedOperator  = operator
+      expectedRecipient = lenderA
+      expectedLocker    = lenderB
+      loanACid          = state.loanACid
+      payoffAmount      = 101000.0
+      instrument        = "USD-TEST"
+      expiresAt         = tExpiry
 
   allocatedLenderBCashCid <- submit lenderB do
     exerciseCmd state.lenderBCashCid Allocate with
@@ -40,6 +51,7 @@ runLiveRefinancing = script do
       lenderB
       borrower
       operator
+      expectedRecipient    = lenderA
       newPrincipal         = 100000.0
       maturityDate         = date 2029 Dec 31
       collateralInstrument = "COLLAT-TEST"
@@ -63,13 +75,21 @@ runLiveRefinancing = script do
       loanACid            = state.loanACid
       collateralCid       = state.collateralCid
 
-  receiptCid <- submit borrower do
+  (receiptA, receiptB, receiptBorrower) <- submit borrower do
     exerciseCmd closingRequestCid Execute
 
-  Some rc <- queryContractId borrower receiptCid
+  Some rc <- queryContractId borrower receiptBorrower
   debug ("=== CANTON LIVE CLOSING TRANSACTION COMMITTED SUCCESSFULLY ===")
-  debug ("Receipt Contract ID:", receiptCid)
-  debug ("New Loan B Principal:", rc.receipt.newPrincipal)
-  debug ("Payoff Amount:", rc.receipt.payoffAmount)
-  debug ("Borrower Contribution:", rc.receipt.borrowerContribution)
-  debug ("Collateral Units Secured to Lender B:", rc.receipt.collateralUnits)
+  debug ("Lender A Receipt:", receiptA)
+  debug ("Lender B Receipt:", receiptB)
+  debug ("Borrower Receipt:", receiptBorrower)
+  debug ("New Loan B Principal:", rc.newPrincipal)
+  debug ("Payoff Amount:", rc.payoffAmount)
+  debug ("Borrower Contribution:", rc.borrowerContribution)
+  debug ("Collateral Units Secured to Lender B:", rc.collateralUnits)
+
+  return LiveClosingResult with
+    parties = state.parties
+    receiptA
+    receiptB
+    receiptBorrower

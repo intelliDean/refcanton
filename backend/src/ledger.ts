@@ -8,6 +8,9 @@ import {
   PartyLedgerState,
   AtomicCloseResult,
   LedgerTransaction,
+  LenderAPayoffReceipt,
+  LenderBFundingReceipt,
+  BorrowerClosingReceipt,
 } from './types/ledger';
 import { INSTRUMENTS, DEFAULT_PARTIES, BASELINE_CONFIG } from './config/constants';
 import { LedgerStore } from './services/ledgerStore';
@@ -207,10 +210,11 @@ export class CantonLedgerState {
   // ───────────────────────────────────────────────────────────────────────────
   // BORROWER: ATOMIC CLOSING EXECUTION
   // ───────────────────────────────────────────────────────────────────────────
-  executeAtomicClose(requestId: string, borrower: string = DEFAULT_PARTIES.BORROWER): AtomicCloseResult {
+  executeAtomicClose(requestId?: string, borrower: string = DEFAULT_PARTIES.BORROWER, cantonUpdateId?: string): AtomicCloseResult {
+    const targetRequestId = requestId || this.store.closingRequests.find(r => r.borrower === borrower)?.contractId || '';
     // 1. Validate all prerequisites and preconditions
     const ctx = AtomicClosingCoordinator.validatePrerequisites(
-      requestId,
+      targetRequestId,
       borrower,
       this.store.closingRequests,
       this.store.payoffQuotes,
@@ -258,10 +262,50 @@ export class CantonLedgerState {
       }
     );
 
+    const timestamp = new Date().toISOString();
+    const updateId = cantonUpdateId || `1220${require('crypto').createHash('sha256').update(txId + Date.now()).digest('hex')}`;
+
+    const receiptA: LenderAPayoffReceipt = {
+      contractId: `${receiptContract.contractId}-A`,
+      borrower,
+      lenderA: ctx.request.lenderA,
+      loanACid: ctx.loanA.contractId,
+      payoffAmount: ctx.quote.payoffAmount,
+      collateralUnitsReleased: ctx.offer.collateralUnits,
+      closedAt: timestamp,
+    };
+
+    const receiptB: LenderBFundingReceipt = {
+      contractId: `${receiptContract.contractId}-B`,
+      borrower,
+      lenderB: ctx.request.lenderB,
+      loanBCid: newLoanB.contractId,
+      principalFunded: ctx.offer.newPrincipal,
+      collateralUnitsSecured: ctx.offer.collateralUnits,
+      closedAt: timestamp,
+    };
+
+    const receiptBorrower: BorrowerClosingReceipt = {
+      contractId: `${receiptContract.contractId}-Borrower`,
+      borrower,
+      loanACid: ctx.loanA.contractId,
+      loanBCid: newLoanB.contractId,
+      payoffAmount: ctx.quote.payoffAmount,
+      newPrincipal: ctx.offer.newPrincipal,
+      borrowerContribution: BASELINE_CONFIG.BORROWER_REQUIRED_EQUITY,
+      collateralUnits: ctx.offer.collateralUnits,
+      closedAt: timestamp,
+    };
+
     return {
       success: true,
+      updateId,
       transactionId: txId,
+      synchronizerId: 'refsynchronizer',
       receipt: receiptContract,
+      receiptA,
+      receiptB,
+      receiptBorrower,
       loanB: newLoanB,
     };
   }

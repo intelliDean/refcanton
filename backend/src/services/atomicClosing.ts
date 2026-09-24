@@ -39,9 +39,9 @@ export class AtomicClosingCoordinator {
     loansA: LoanA[],
     lockedCollaterals: LockedCollateralHolding[]
   ): AtomicClosingContext {
-    const request = closingRequests.find(r => r.contractId === requestId && r.borrower === borrower);
+    const request = closingRequests.find(r => (!requestId || r.contractId === requestId) && r.borrower === borrower);
     if (!request) {
-      throw new Error(`Active ClosingRequest not found for request ${requestId} and borrower ${borrower}`);
+      throw new Error(`Active ClosingRequest not found for request ${requestId || '(any)'} and borrower ${borrower}`);
     }
 
     const quote = payoffQuotes.find(q => q.contractId === request.payoffQuoteCid);

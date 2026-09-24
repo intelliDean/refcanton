@@ -1,10 +1,9 @@
 -- Closing.daml
 -- Ref Canton: Private Refinancing App
--- The ClosingRequest template contains the Execute choice — the atomic close.
--- One committed ledger update: pays A 101,000, closes A's loan,
--- transfers collateral A -> B, creates B's loan.
--- Satisfies: "Atomic closing: One committed update pays A 101,000, closes A's loan, creates B's 100,000 loan and secures it with the 150 collateral units." (spec line 17-18)
--- See DECISIONS.md D5, D6.
+-- The ClosingRequest template executes the atomic close in one committed ledger transaction.
+-- Satisfies: "Atomic closing: One committed update pays A 101,000, closes A's loan, creates B's 100,000 loan and secures it with the 150 collateral units."
+-- Role-isolated receipts: Lender A and Lender B only receive receipts for their respective legs,
+-- preserving sub-transaction privacy.
 
 module Closing where
 
@@ -13,36 +12,58 @@ import Loan
 import Approvals
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- CLOSING RECEIPT
--- Audit record created upon successful atomic closing.
+-- ROLE-ISOLATED CLOSING RECEIPTS
 -- ─────────────────────────────────────────────────────────────────────────────
 
-data ClosingReceipt = ClosingReceipt
+-- Lender A Payoff Receipt: Visible to Lender A + Borrower ONLY.
+-- Excludes all terms, amounts, and contract IDs of Lender B.
+template LenderAPayoffReceipt
   with
-    loanBCid            : ContractId LoanB
-    closedAt            : Time
-    payoffAmount        : Decimal       -- 101,000.0
-    newPrincipal        : Decimal       -- 100,000.0
-    borrowerContribution: Decimal       -- 1,000.0
-    collateralUnits     : Decimal       -- 150.0
-  deriving (Eq, Show)
-
-template ClosingReceiptContract
-  with
-    borrower   : Party
-    lenderA    : Party
-    lenderB    : Party
-    operator   : Party
-    receipt    : ClosingReceipt
+    borrower                : Party
+    lenderA                 : Party
+    loanACid                : ContractId LoanA
+    payoffAmount            : Decimal
+    collateralUnitsReleased : Decimal
+    closedAt                : Time
   where
     signatory borrower
-    observer  lenderA, lenderB, operator
+    observer  lenderA
+
+-- Lender B Funding Receipt: Visible to Lender B + Borrower ONLY.
+-- Excludes all payoff amounts, equity contributions, and contract IDs of Lender A.
+template LenderBFundingReceipt
+  with
+    borrower               : Party
+    lenderB                : Party
+    loanBCid               : ContractId LoanB
+    principalFunded        : Decimal
+    collateralUnitsSecured : Decimal
+    closedAt               : Time
+  where
+    signatory borrower
+    observer  lenderB
+
+-- Borrower Closing Receipt: Full reconciliation audit record, visible to Borrower ONLY.
+template BorrowerClosingReceipt
+  with
+    borrower             : Party
+    loanACid             : ContractId LoanA
+    loanBCid             : ContractId LoanB
+    payoffAmount         : Decimal
+    newPrincipal         : Decimal
+    borrowerContribution : Decimal
+    collateralUnits      : Decimal
+    closedAt             : Time
+  where
+    signatory borrower
 
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- CLOSING REQUEST
 -- Borrower initiates this contract after receiving binding approvals from both lenders.
--- The Execute choice executes the full atomic close in one committed ledger transaction.
+-- Stakeholders: signatory borrower ONLY.
+-- NO observer lenderA, lenderB — this ensures Canton's sub-transaction privacy tree
+-- keeps each lender isolated to its own branch of the execution.
 -- ─────────────────────────────────────────────────────────────────────────────
 
 template ClosingRequest
@@ -58,7 +79,6 @@ template ClosingRequest
     collateralCid       : ContractId LockedCollateralHolding
   where
     signatory borrower
-    observer  lenderA, lenderB
 
     -- Borrower can cancel before execution
     choice Cancel : ()
@@ -69,7 +89,7 @@ template ClosingRequest
     -- THE ATOMIC CLOSE
     -- Single transaction tree: all steps commit together or revert together.
     -- ─────────────────────────────────────────────────────────────────────────
-    choice Execute : ContractId ClosingReceiptContract
+    choice Execute : (ContractId LenderAPayoffReceipt, ContractId LenderBFundingReceipt, ContractId BorrowerClosingReceipt)
       controller borrower
       do
         -- Step 1: Verify borrower has required 1,000 contribution and valid instrument
@@ -78,6 +98,8 @@ template ClosingRequest
           (borrowerCash.amount >= 1000.0)
         assertMsg "Borrower cash instrument must be USD-TEST"
           (borrowerCash.instrument == "USD-TEST")
+        assertMsg "Borrower cash operator mismatch"
+          (borrowerCash.operator == operator)
 
         -- Step 2: Validate both approval contracts, instruments, and reconcile numbers
         quote <- fetch payoffQuoteCid
@@ -93,33 +115,50 @@ template ClosingRequest
           (offer.collateralUnits == 150.0)
 
         -- Step 3: Transfer borrower's 1,000 contribution to lenderA
-        _ <- exercise borrowerCashCid TransferPartial with
+        (borrowerPaymentToA, _) <- exercise borrowerCashCid TransferPartial with
           recipient      = lenderA
           transferAmount = 1000.0
 
-        -- Step 4: Settle LoanA and repledge collateral to lenderB
-        -- Closes LoanA, releases A's claim, locks collateral to lenderB
-        newLockedCollateralCid <- exercise payoffQuoteCid SettleAndRepledge with
-          newLocker     = lenderB
-          collateralCid = collateralCid
+        -- Step 4: Disburse Lender B's funds to lenderA (returns any excess cash to lenderB)
+        (lenderBPaymentToA, pendingLoanB) <- exercise replacementOfferCid DisburseFunds with
+          recipientA = lenderA
 
-        -- Step 5: Accept offer, fund 100,000 to lenderA, and create LoanB
-        -- Transferred funds (100,000) + borrower funds (1,000) = 101,000 received by lenderA
-        (_, loanBCid) <- exercise replacementOfferCid AcceptAndFund with
-          recipientA             = lenderA
-          newLockedCollateralCid = newLockedCollateralCid
+        -- Step 5: Settle LoanA with verified payment cash and repledge collateral to Lender B
+        repledgedCollateralCid <- exercise payoffQuoteCid SettleAndRepledge with
+          newLocker       = lenderB
+          collateralCid   = collateralCid
+          paymentCashCids = [borrowerPaymentToA, lenderBPaymentToA]
 
-        -- Step 6: Create immutable closing receipt for parties and operator audit
+        -- Step 6: Secure and finalize LoanB (binds and consumes repledged collateral)
+        loanBCid <- exercise pendingLoanB SecureLoan with
+          collateralCid = repledgedCollateralCid
+
+        -- Step 7: Issue role-isolated receipts
         now <- getTime
-        create ClosingReceiptContract with
+        receiptA <- create LenderAPayoffReceipt with
           borrower
           lenderA
+          loanACid
+          payoffAmount            = quote.payoffAmount
+          collateralUnitsReleased = offer.collateralUnits
+          closedAt                = now
+
+        receiptB <- create LenderBFundingReceipt with
+          borrower
           lenderB
-          operator
-          receipt = ClosingReceipt with
-            loanBCid
-            closedAt             = now
-            payoffAmount         = quote.payoffAmount
-            newPrincipal         = offer.newPrincipal
-            borrowerContribution = 1000.0
-            collateralUnits      = offer.collateralUnits
+          loanBCid
+          principalFunded        = offer.newPrincipal
+          collateralUnitsSecured = offer.collateralUnits
+          closedAt               = now
+
+        receiptBorrower <- create BorrowerClosingReceipt with
+          borrower
+          loanACid
+          loanBCid
+          payoffAmount         = quote.payoffAmount
+          newPrincipal         = offer.newPrincipal
+          borrowerContribution = 1000.0
+          collateralUnits      = offer.collateralUnits
+          closedAt             = now
+
+        return (receiptA, receiptB, receiptBorrower)

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "ts-node src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "test": "ts-node src/tests/regression.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",

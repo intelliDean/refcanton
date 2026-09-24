@@ -8,46 +8,66 @@ import Daml.Script
 import Loan
 import Approvals
 import Closing
+import TestLiveCanton (runLiveRefinancing)
 
 auditParticipant2 : Script ()
 auditParticipant2 = script do
-  parties <- listKnownParties
-  debug ("=== PARTICIPANT 2 (LENDER A) PRIVACY AUDIT ===")
-  debug ("Node Known Parties Count:", length parties)
+  result <- runLiveRefinancing
+  let lenderA = result.parties.lenderA
 
-  -- Get LenderA party on Participant 2
-  lenderA <- allocateParty "LenderA"
+  -- 1. Confirm Lender A sees its own expected records first
+  receiptsA <- queryFilter @LenderAPayoffReceipt lenderA (\r -> r.lenderA == lenderA)
+  debug ("Participant 2 Visible Lender A Receipts:", length receiptsA)
+  assertMsg "Lender A expected to see its own payoff receipt" (not (null receiptsA))
 
-  -- Query contracts visible to LenderA on Participant 2
-  receipts <- query @ClosingReceiptContract lenderA
-  debug ("Participant 2 Visible Closing Receipts:", length receipts)
-
-  loansB <- query @LoanB lenderA
+  -- 2. Confirm competitor private terms are strictly hidden from Lender A
+  loansB <- queryFilter @LoanB lenderA (\_ -> True)
   debug ("Participant 2 Visible LoanB (Expected 0):", length loansB)
   assertMsg "Privacy Violation: Participant 2 sees LoanB" (null loansB)
 
-  offers <- query @ReplacementOffer lenderA
+  offers <- queryFilter @ReplacementOffer lenderA (\_ -> True)
   debug ("Participant 2 Visible ReplacementOffer (Expected 0):", length offers)
   assertMsg "Privacy Violation: Participant 2 sees ReplacementOffer" (null offers)
-  debug ("✓ PRIVACY CHECK PASSED: Lender A has ZERO visibility into Lender B terms!")
+
+  receiptsB <- queryFilter @LenderBFundingReceipt lenderA (\_ -> True)
+  debug ("Participant 2 Visible LenderBFundingReceipt (Expected 0):", length receiptsB)
+  assertMsg "Privacy Violation: Participant 2 sees LenderBFundingReceipt" (null receiptsB)
+
+  borrowerReceipts <- queryFilter @BorrowerClosingReceipt lenderA (\_ -> True)
+  debug ("Participant 2 Visible BorrowerClosingReceipt (Expected 0):", length borrowerReceipts)
+  assertMsg "Privacy Violation: Participant 2 sees BorrowerClosingReceipt" (null borrowerReceipts)
+
+  debug ("✓ PRIVACY CHECK PASSED: Lender A sees expected payoff record, with ZERO visibility into Lender B terms!")
 
 auditParticipant3 : Script ()
 auditParticipant3 = script do
-  parties <- listKnownParties
-  debug ("=== PARTICIPANT 3 (LENDER B) PRIVACY AUDIT ===")
-  debug ("Node Known Parties Count:", length parties)
+  result <- runLiveRefinancing
+  let lenderB = result.parties.lenderB
 
-  -- Get LenderB party on Participant 3
-  lenderB <- allocateParty "LenderB"
+  -- 1. Confirm Lender B sees its own expected records first
+  receiptsB <- queryFilter @LenderBFundingReceipt lenderB (\r -> r.lenderB == lenderB)
+  debug ("Participant 3 Visible Lender B Receipts:", length receiptsB)
+  assertMsg "Lender B expected to see its own funding receipt" (not (null receiptsB))
 
-  receipts <- query @ClosingReceiptContract lenderB
-  debug ("Participant 3 Visible Closing Receipts:", length receipts)
+  loansB <- queryFilter @LoanB lenderB (\_ -> True)
+  debug ("Participant 3 Visible LoanB (Expected 1):", length loansB)
+  assertMsg "Lender B expected to see active LoanB" (not (null loansB))
 
-  loansA <- query @LoanA lenderB
+  -- 2. Confirm competitor private terms are strictly hidden from Lender B
+  loansA <- queryFilter @LoanA lenderB (\_ -> True)
   debug ("Participant 3 Visible LoanA (Expected 0):", length loansA)
   assertMsg "Privacy Violation: Participant 3 sees LoanA" (null loansA)
 
-  quotes <- query @PayoffQuote lenderB
+  quotes <- queryFilter @PayoffQuote lenderB (\_ -> True)
   debug ("Participant 3 Visible PayoffQuote (Expected 0):", length quotes)
   assertMsg "Privacy Violation: Participant 3 sees PayoffQuote" (null quotes)
-  debug ("✓ PRIVACY CHECK PASSED: Lender B has ZERO visibility into Lender A terms!")
+
+  receiptsA <- queryFilter @LenderAPayoffReceipt lenderB (\_ -> True)
+  debug ("Participant 3 Visible LenderAPayoffReceipt (Expected 0):", length receiptsA)
+  assertMsg "Privacy Violation: Participant 3 sees LenderAPayoffReceipt" (null receiptsA)
+
+  borrowerReceipts <- queryFilter @BorrowerClosingReceipt lenderB (\_ -> True)
+  debug ("Participant 3 Visible BorrowerClosingReceipt (Expected 0):", length borrowerReceipts)
+  assertMsg "Privacy Violation: Participant 3 sees BorrowerClosingReceipt" (null borrowerReceipts)
+
+  debug ("✓ PRIVACY CHECK PASSED: Lender B sees expected loan and funding records, with ZERO visibility into Lender A terms!")
