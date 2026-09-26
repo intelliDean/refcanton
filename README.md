@@ -2,8 +2,8 @@
 > *Sub-Transaction Privacy & Atomic Collateral Repledging on Canton Network & Daml*
 
 [![CI](https://github.com/intelliDean/refcanton/actions/workflows/ci.yml/badge.svg)](https://github.com/intelliDean/refcanton/actions/workflows/ci.yml)
-[![Daml Tests](https://img.shields.io/badge/Daml%20Tests-17%20Passed%20(100%25)-brightgreen.svg)]()
-[![Backend Tests](https://img.shields.io/badge/Backend%20Tests-5%20Suites%20Passed-brightgreen.svg)]()
+[![Daml Tests](https://img.shields.io/badge/Daml%20Tests-21%20Passed%20(100%25)-brightgreen.svg)]()
+[![Backend Tests](https://img.shields.io/badge/Backend%20Tests-6%20Passed%20(100%25)-brightgreen.svg)]()
 [![Canton Evidence](https://img.shields.io/badge/Canton%20Evidence-Verified%20Update%20ID-blue.svg)](EVIDENCE.md)
 [![Daml SDK](https://img.shields.io/badge/Daml%20SDK-3.4.11-blue.svg)]()
 [![Canton](https://img.shields.io/badge/Canton-Network%20Enabled-blueviolet.svg)]()
@@ -135,11 +135,15 @@ Execute the Daml contract tests and backend security regression suite:
 ```bash
 npm test
 ```
-**Test Coverage Includes (17 Daml Tests + 5 Backend Security Suites):**
+**Test Coverage Includes (21 Daml Tests + 6 Backend Security Tests):**
 - **Smart Contract Security & Invariants**:
   - `testRefinancingLifecycle`: Complete happy-path atomic swap and balance verification.
   - `testUnauthorizedCollateralReleaseFails`: Rejects attempts to unlock collateral without lender authorization.
   - `testPaymentFreeReleaseFails`: Rejects collateral release through quotes if payment cash is omitted.
+  - `testDuplicatePaymentCashFails`: Rejects attempts to duplicate payment cash contract IDs in settlement payments.
+  - `testReusedPaymentCashFails`: Rejects attempts to reuse already-settled cash holdings across multiple settlements.
+  - `testDisbursementRequiresCollateralSecuring`: Proves replacement funds cannot disburse independently without securing collateral.
+  - `testBoundCollateralExclusivelyLocked`: Verifies bound collateral cannot be re-pledged or double-attached to multiple loans.
   - `testWrongAssetFails`: Rejects settlement when counterfeit or unexpected asset instruments are used.
   - `testCorrectAssetNameWrongIssuerFails`: Rejects tokens matching the asset symbol but minted by an unauthorized operator.
   - `testExcessFundingReturnsChange`: Verifies excess cash disbursed by Lender B is returned as change via `TransferPartial`.
@@ -148,18 +152,21 @@ npm test
   - `testExpiredApprovalFails` & `testInsufficientBorrowerFundsFails`: Enforces deadlines and equity requirements.
   - `testQuoteRevocationFails`, `testOfferWithdrawalFails`, `testBorrowerCancelFails`: Choice authorization rules.
   - `auditParticipant2` & `auditParticipant3`: Multi-participant sub-transaction privacy assertions.
-- **Backend API & Authentication Tests**:
+- **Backend API, Cryptographic Authentication & Security Tests**:
   - HTTP 401 unauthenticated request rejection across all endpoints.
-  - HTTP 403 cross-party snooping rejection (e.g. Borrower accessing Lender A state).
-  - Authenticated party-isolated transaction history filtering.
+  - Rejection of forged `Bearer admin` backdoor and caller-selected `X-Party-Id` spoofing without HMAC-SHA256 signature.
+  - Cryptographically verified HMAC-SHA256 bearer tokens with timing-safe comparison.
+  - HTTP 403 cross-party snooping rejection (e.g. Borrower accessing Lender A state, Lender A accessing Lender B).
+  - Authenticated party-isolated transaction history filtering (zero competitor leak).
   - HTTP 503 fail-closed rejection when Canton ledger nodes are offline.
+  - HTTP 400 rejection of nonexistent closing requests (no synthetic fallback or false success).
 
 ### Step 4: Run Live Canton API Integration & Privacy Test
 With the cluster running, execute the end-to-end integration test through the HTTP API Gateway:
 ```bash
 ./scripts/test_live_api_closing.sh
 ```
-This tests genuine authentication, quote issuance, offer commitment, atomic closing on Canton returning a committed `updateId`, and verifies post-closing privacy across isolated lender sessions.
+This tests genuine cryptographic authentication, quote issuance, offer commitment, atomic closing submitted directly to Canton (`POST /v2/commands/submit-and-wait`) returning a committed `updateId`, confirms the exact transaction via `/v2/updates/transaction-by-id`, and verifies post-closing privacy across isolated lender sessions on both active state and transaction history.
 
 ### Step 5: Start the Application
 ```bash
