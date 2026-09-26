@@ -14,6 +14,7 @@ import { quotesRouter } from '../routes/quotes';
 import { offersRouter } from '../routes/offers';
 import { closingRouter } from '../routes/closing';
 import { cantonClient } from '../services/cantonClient';
+import { ledger } from '../ledger';
 import { generateVerifiedToken } from '../middleware/auth';
 import { DEFAULT_PARTIES } from '../config/constants';
 
@@ -189,13 +190,18 @@ async function runRegressionTests() {
     // ─────────────────────────────────────────────────────────────────────────
     console.log('\n[TEST 4] Verifying Settlement Rejection when Canton is Offline (HTTP 503)...');
 
+    // Issue quote and offer first so borrower can create a valid closing request
+    ledger.issuePayoffQuote(DEFAULT_PARTIES.LENDER_A, DEFAULT_PARTIES.BORROWER);
+    ledger.issueReplacementOffer(DEFAULT_PARTIES.LENDER_B, DEFAULT_PARTIES.BORROWER);
+    const offlineTestReq = ledger.createClosingRequest(DEFAULT_PARTIES.BORROWER);
+
     // Temporarily mock health check as offline
     const originalCheckHealth = cantonClient.checkHealth.bind(cantonClient);
     cantonClient.checkHealth = async () => ({ online: false, error: 'Connection refused' });
 
     const res4 = await request(server, 'POST', '/api/closing/execute', {
       Authorization: `Bearer ${tokenBorrower}`,
-    }, { requestId: 'req-offline-test' });
+    }, { requestId: offlineTestReq.contractId });
 
     assert(res4.status === 503, 'POST /api/closing/execute when Canton is offline returns HTTP 503');
     assert(res4.data.error === 'CANTON_OFFLINE', 'Returns CANTON_OFFLINE error payload');

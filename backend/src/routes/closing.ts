@@ -40,17 +40,7 @@ closingRouter.post('/execute', requireParty(DEFAULT_PARTIES.BORROWER), async (re
     const { requestId } = req.body;
     const borrower = req.authenticatedParty || DEFAULT_PARTIES.BORROWER;
 
-    // 1. Verify Canton node health (Fail-closed: reject settlement when Canton is unavailable)
-    const health = await cantonClient.checkHealth();
-    if (!health.online) {
-      res.status(503).json({
-        error: 'CANTON_OFFLINE',
-        message: 'Canton ledger service is offline. Settlement rejected.',
-      });
-      return;
-    }
-
-    // 2. Enforce required, non-empty requestId
+    // 1. Enforce required, non-empty requestId
     if (!requestId || typeof requestId !== 'string') {
       res.status(400).json({
         error: 'INVALID_REQUEST',
@@ -59,7 +49,7 @@ closingRouter.post('/execute', requireParty(DEFAULT_PARTIES.BORROWER), async (re
       return;
     }
 
-    // 3. Look up closing request: reject nonexistent requests
+    // 2. Look up closing request: reject nonexistent requests
     const closingReq = ledger.getClosingRequest(requestId);
     if (!closingReq) {
       res.status(400).json({
@@ -73,6 +63,16 @@ closingRouter.post('/execute', requireParty(DEFAULT_PARTIES.BORROWER), async (re
       res.status(403).json({
         error: 'FORBIDDEN',
         message: `Party '${borrower}' is not authorized to execute closing request '${requestId}' for borrower '${closingReq.borrower}'.`,
+      });
+      return;
+    }
+
+    // 3. Verify Canton node health (Fail-closed: reject settlement when Canton is unavailable)
+    const health = await cantonClient.checkHealth();
+    if (!health.online) {
+      res.status(503).json({
+        error: 'CANTON_OFFLINE',
+        message: 'Canton ledger service is offline. Settlement rejected.',
       });
       return;
     }
