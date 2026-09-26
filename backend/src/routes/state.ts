@@ -59,6 +59,18 @@ stateRouter.get('/transactions', authMiddleware, (req: AuthenticatedRequest, res
   res.json(filtered);
 });
 
+// Retrieve exact transaction by Canton Update ID
+stateRouter.get('/transactions/:updateId', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const updateId = String(req.params.updateId);
+    const party = req.authenticatedParty || DEFAULT_PARTIES.BORROWER;
+    const tx = await cantonClient.getTransactionById(updateId, party);
+    res.json(tx);
+  } catch (error: any) {
+    res.status(404).json({ error: 'TRANSACTION_NOT_FOUND', message: error.message });
+  }
+});
+
 // System: Reset Demo Ledger (Restricted to Operator)
 stateRouter.post('/reset', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
   if (req.authenticatedParty !== DEFAULT_PARTIES.OPERATOR) {

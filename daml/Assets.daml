@@ -70,13 +70,36 @@ template LockedCollateralHolding
           context = newContext
 
     -- Bind collateral to a specific loan facility, consuming the existing holding
-    -- Enforces: collateral cannot be pledged to multiple loans or reused with fresh offers.
-    choice BindToLoan : ContractId LockedCollateralHolding
+    -- Produces non-rebindable BoundCollateralHolding that enforces exclusive attachment to one loan.
+    choice BindToLoan : ContractId BoundCollateralHolding
       with
         loanContext : Text
       controller locker
       do
-        create this with context = loanContext
+        create BoundCollateralHolding with
+          owner; operator; locker; loanContext; instrument; amount
+
+
+-- Bound collateral holding — exclusively attached to a specific loan facility.
+-- Signatories include locker: cannot be rebound or repledged to any other loan.
+-- Can only be released upon loan payoff by the locker (lender).
+template BoundCollateralHolding
+  with
+    owner       : Party    -- borrower (equity owner)
+    operator    : Party
+    locker      : Party    -- lender holding the exclusive pledge
+    loanContext : Text     -- e.g. "LoanB-collateral"
+    instrument  : Text     -- "COLLAT-TEST"
+    amount      : Decimal  -- 150.0
+  where
+    signatory operator, owner, locker
+
+    -- Release the exclusive bound lock upon loan payoff
+    choice ReleaseBoundCollateral : ContractId CollateralHolding
+      controller locker
+      do
+        create CollateralHolding with
+          owner; operator; instrument; amount
 
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -95,6 +118,12 @@ template CashHolding
   where
     signatory operator
     observer  owner, allocatedFor
+
+    -- Settle payment cash holding, consuming the input contract to prevent reuse across settlements
+    choice SettlePayment : ContractId CashHolding
+      controller owner
+      do
+        create this with allocatedFor = None
 
     -- Allocate cash to a specific borrower / transaction preparation
     -- Satisfies: "Unused preparation allocations can be withdrawn or cancelled" (spec line 23)

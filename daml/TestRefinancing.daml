@@ -678,3 +678,138 @@ testPrivacyWithSeparateLenderCredentials = script do
 
   rAFromB <- queryContractId lenderB receiptA
   assertMsg "Privacy breach: LenderB queried receiptA post-close" (rAFromB == None)
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 5. REGRESSION: Contract Safety Invariants & Source-Review Fixes
+-- ─────────────────────────────────────────────────────────────────────────────
+
+testDuplicatePaymentCashFails : Script ()
+testDuplicatePaymentCashFails = script do
+  let t0 = time (date 2026 Jul 25) 10 0 0
+  let tExpiry = time (date 2026 Jul 26) 18 0 0
+  setTime t0
+
+  state <- initializeLedger
+  let TestParties{borrower, lenderA, lenderB} = state.parties
+  approvals <- setupApprovals state.parties state tExpiry
+
+  -- Transfer partial payment to lenderA (e.g. $1,000)
+  (cashForA, _) <- submit borrower do
+    exerciseCmd state.borrowerCashCid TransferPartial with
+      recipient      = lenderA
+      transferAmount = 1000.0
+
+  -- Borrower attempts to pass duplicate payment cash IDs [cashForA, cashForA]
+  -- Must fail with duplicate detection
+  submitMustFail borrower do
+    exerciseCmd approvals.payoffQuoteCid SettleAndRepledge with
+      newLocker       = lenderB
+      collateralCid   = state.collateralCid
+      paymentCashCids = [cashForA, cashForA]
+
+
+testReusedPaymentCashFails : Script ()
+testReusedPaymentCashFails = script do
+  let t0 = time (date 2026 Jul 25) 10 0 0
+  let tExpiry = time (date 2026 Jul 26) 18 0 0
+  setTime t0
+
+  state <- initializeLedger
+  let TestParties{operator, borrower, lenderA, lenderB} = state.parties
+  approvals <- setupApprovals state.parties state tExpiry
+
+  -- Execute full closing once
+  closingRequestCid <- submit borrower do
+    createCmd ClosingRequest with
+      borrower
+      lenderA
+      lenderB
+      operator
+      payoffQuoteCid      = approvals.payoffQuoteCid
+      replacementOfferCid = approvals.replacementOfferCid
+      borrowerCashCid     = state.borrowerCashCid
+      loanACid            = state.loanACid
+      collateralCid       = state.collateralCid
+
+  _ <- submit borrower do
+    exerciseCmd closingRequestCid Execute
+
+  -- Attempting to reuse the consumed borrower cash holding or quotes in another settlement must fail
+  submitMustFail borrower do
+    exerciseCmd approvals.payoffQuoteCid SettleAndRepledge with
+      newLocker       = lenderB
+      collateralCid   = state.collateralCid
+      paymentCashCids = [state.borrowerCashCid]
+
+
+testDisbursementRequiresCollateralSecuring : Script ()
+testDisbursementRequiresCollateralSecuring = script do
+  let t0 = time (date 2026 Jul 25) 10 0 0
+  let tExpiry = time (date 2026 Jul 26) 18 0 0
+  setTime t0
+
+  state <- initializeLedger
+  let TestParties{operator, borrower, lenderA, lenderB} = state.parties
+  approvals <- setupApprovals state.parties state tExpiry
+
+  (borrowerPaymentToA, _) <- submit borrower do
+    exerciseCmd state.borrowerCashCid TransferPartial with
+      recipient      = lenderA
+      transferAmount = 1000.0
+
+  -- Create an unpledged dummy collateral holding not locked to lenderA
+  unlockedCollat <- submit (actAs [operator, borrower]) do
+    createCmd CollateralHolding with
+      owner      = borrower
+      operator
+      instrument = "COLLAT-TEST"
+      amount     = 150.0
+
+  dummyLockedCollat <- submit borrower do
+    exerciseCmd unlockedCollat Lock with
+      locker  = lenderB
+      context = "Wrong-collateral"
+
+  -- Attempting to disburse without valid PayoffQuote / LoanA collateral securing must fail
+  submitMustFail borrower do
+    exerciseCmd approvals.replacementOfferCid DisburseAndSecure with
+      payoffQuoteCid       = approvals.payoffQuoteCid
+      borrowerPaymentToA
+      currentCollateralCid = dummyLockedCollat
+
+
+testBoundCollateralExclusivelyLocked : Script ()
+testBoundCollateralExclusivelyLocked = script do
+  let t0 = time (date 2026 Jul 25) 10 0 0
+  let tExpiry = time (date 2026 Jul 26) 18 0 0
+  setTime t0
+
+  state <- initializeLedger
+  let TestParties{operator, borrower, lenderA, lenderB} = state.parties
+  approvals <- setupApprovals state.parties state tExpiry
+
+  closingRequestCid <- submit borrower do
+    createCmd ClosingRequest with
+      borrower
+      lenderA
+      lenderB
+      operator
+      payoffQuoteCid      = approvals.payoffQuoteCid
+      replacementOfferCid = approvals.replacementOfferCid
+      borrowerCashCid     = state.borrowerCashCid
+      loanACid            = state.loanACid
+      collateralCid       = state.collateralCid
+
+  (_, receiptB, _) <- submit borrower do
+    exerciseCmd closingRequestCid Execute
+
+  Some recB <- queryContractId lenderB receiptB
+  Some loanB <- queryContractId lenderB recB.loanBCid
+
+  -- Bound collateral holding exists and is exclusively held
+  Some boundCollat <- queryContractId lenderB loanB.collateralCid
+  assert (boundCollat.amount == 150.0)
+  assert (boundCollat.locker == lenderB)
+  assert (boundCollat.loanContext == "LoanB-collateral")
+

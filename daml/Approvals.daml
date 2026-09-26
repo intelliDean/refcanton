@@ -8,6 +8,7 @@
 module Approvals where
 
 import DA.Foldable (forA_)
+import DA.List (dedup)
 import Assets
 import Loan
 
@@ -40,7 +41,7 @@ template PayoffQuote
       controller lenderA
       do return ()
 
-    -- Borrower exercises this INSIDE ClosingRequest.Execute.
+    -- Borrower exercises this INSIDE ClosingRequest.Execute / DisburseAndSecure.
     -- Signatory lenderA + controller borrower provide authorization to archive LoanA
     -- and re-pledge the collateral to lenderB upon verified payment.
     choice SettleAndRepledge : ContractId LockedCollateralHolding
@@ -53,6 +54,7 @@ template PayoffQuote
         now <- getTime
         assertMsg "PayoffQuote has expired" (now < expiresAt)
         assertMsg "Payment cash list cannot be empty" (not (null paymentCashCids))
+        assertMsg "Duplicate payment cash IDs not allowed" (dedup paymentCashCids == paymentCashCids)
         assertMsg "Locker mismatch" (newLocker == expectedLocker)
 
         payments <- mapA fetch paymentCashCids
@@ -63,6 +65,10 @@ template PayoffQuote
 
         let totalPaid = sum (map (\c -> c.amount) payments)
         assertMsg "Payment amount insufficient to satisfy payoff" (totalPaid >= payoffAmount)
+
+        -- Consume each payment cash holding to prevent reuse across settlements
+        forA_ paymentCashCids $ \cid -> do
+          exercise cid SettlePayment
 
         loanA <- fetch loanACid
         assertMsg "Payoff amount must match loan principal" (payoffAmount == loanA.principal)
@@ -108,83 +114,56 @@ template ReplacementOffer
 
     -- Borrower exercises this INSIDE ClosingRequest.Execute.
     -- Signatory lenderB + controller borrower authorize transferring agreed principal
-    -- to expectedRecipient (with excess cash refunded to lenderB) and issuing PendingLoanB.
-    choice DisburseFunds : (ContractId CashHolding, ContractId PendingLoanB)
+    -- to expectedRecipient ONLY while simultaneously securing and binding the repledged collateral.
+    -- Eliminates independent disbursement without collateral securing.
+    choice DisburseAndSecure : (ContractId CashHolding, ContractId LoanB)
       with
-        recipientA : Party
+        payoffQuoteCid       : ContractId PayoffQuote
+        borrowerPaymentToA   : ContractId CashHolding
+        currentCollateralCid : ContractId LockedCollateralHolding
       controller borrower
       do
         now <- getTime
         assertMsg "ReplacementOffer has expired" (now < expiresAt)
-        assertMsg "Recipient must match expected recipient" (recipientA == expectedRecipient)
+
         bCash <- fetch lenderBCashCid
         assertMsg "Lender B cash insufficient" (bCash.amount >= newPrincipal)
         assertMsg "Cash instrument mismatch" (bCash.instrument == cashInstrument)
         assertMsg "Cash operator mismatch" (bCash.operator == operator)
 
+        -- 1. Transfer Lender B's funding to expected recipient (Lender A)
         cashForA <- if bCash.amount == newPrincipal
           then exercise lenderBCashCid Transfer with
-            recipient = recipientA
+            recipient = expectedRecipient
           else do
             (transferred, _change) <- exercise lenderBCashCid TransferPartial with
-              recipient      = recipientA
+              recipient      = expectedRecipient
               transferAmount = newPrincipal
             return transferred
 
-        pendingLoanB <- create PendingLoanB with
-          borrower
-          lenderB
-          operator
-          newPrincipal
-          maturityDate
-          collateralInstrument
-          collateralUnits
-          capRate
-          amortizationPeriods
+        -- 2. Settle PayoffQuote and re-pledge collateral to Lender B
+        repledgedCollatCid <- exercise payoffQuoteCid SettleAndRepledge with
+          newLocker       = lenderB
+          collateralCid   = currentCollateralCid
+          paymentCashCids = [borrowerPaymentToA, cashForA]
 
-        return (cashForA, pendingLoanB)
+        repledgedCollat <- fetch repledgedCollatCid
+        assertMsg "Collateral amount must match offer" (repledgedCollat.amount == collateralUnits)
+        assertMsg "Collateral instrument mismatch" (repledgedCollat.instrument == collateralInstrument)
 
-
--- ─────────────────────────────────────────────────────────────────────────────
--- PENDING LOAN B
--- Intermediate loan commitment produced after disbursement.
--- Binds the incoming collateral strictly to LoanB and consumes it.
--- ─────────────────────────────────────────────────────────────────────────────
-
-template PendingLoanB
-  with
-    borrower            : Party
-    lenderB             : Party
-    operator            : Party
-    newPrincipal        : Decimal
-    maturityDate        : Date
-    collateralInstrument: Text
-    collateralUnits     : Decimal
-    capRate             : Decimal
-    amortizationPeriods : Int
-  where
-    signatory lenderB, borrower
-
-    choice SecureLoan : ContractId LoanB
-      with
-        collateralCid : ContractId LockedCollateralHolding
-      controller borrower
-      do
-        lockedCollateral <- fetch collateralCid
-        assertMsg "Collateral amount must match offer" (lockedCollateral.amount == collateralUnits)
-        assertMsg "Collateral locker must be lenderB" (lockedCollateral.locker == lenderB)
-        assertMsg "Collateral owner must be borrower" (lockedCollateral.owner == borrower)
-        assertMsg "Collateral instrument mismatch" (lockedCollateral.instrument == collateralInstrument)
-
-        boundCollateralCid <- exercise collateralCid BindToLoan with
+        -- 3. Exclusively bind collateral to Loan B (produces non-rebindable BoundCollateralHolding)
+        boundCollatCid <- exercise repledgedCollatCid BindToLoan with
           loanContext = "LoanB-collateral"
 
-        create LoanB with
+        -- 4. Create Loan B
+        loanB <- create LoanB with
           borrower
           lenderB
           operator
           principal = newPrincipal
           maturityDate
-          collateralCid = boundCollateralCid
+          collateralCid = boundCollatCid
           capRate
           amortizationPeriods
+
+        return (cashForA, loanB)

@@ -8,7 +8,7 @@
 
 module Loan where
 
-import Assets (LockedCollateralHolding)
+import Assets (LockedCollateralHolding, BoundCollateralHolding)
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- LOAN INTERFACE
@@ -21,14 +21,12 @@ data LoanView = LoanView
     lender       : Party
     principal    : Decimal
     maturityDate : Date
-    collateralCid: ContractId LockedCollateralHolding
   deriving (Eq, Show)
 
 interface LoanInterface where
   viewtype LoanView
 
   getPayoffAmount : Decimal
-  getCollateralCid : ContractId LockedCollateralHolding
 
   choice CloseByRefinancing : ()
     controller (view this).borrower, (view this).lender
@@ -63,10 +61,9 @@ template LoanA
 
     interface instance LoanInterface for LoanA where
       view = LoanView with
-        borrower; lender = lenderA; principal; maturityDate; collateralCid
+        borrower; lender = lenderA; principal; maturityDate
 
       getPayoffAmount = principal
-      getCollateralCid = collateralCid
 
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -85,7 +82,7 @@ template LoanB
     -- Shared fields:
     principal           : Decimal   -- new loan principal: 100000.0
     maturityDate        : Date      -- e.g. 2029-12-31
-    collateralCid       : ContractId LockedCollateralHolding
+    collateralCid       : ContractId BoundCollateralHolding
     -- PRIVATE to lenderB:
     capRate             : Decimal   -- e.g. 0.075 (7.5% ceiling)
     amortizationPeriods : Int       -- e.g. 24 periods
@@ -97,7 +94,6 @@ template LoanB
 
     interface instance LoanInterface for LoanB where
       view = LoanView with
-        borrower; lender = lenderB; principal; maturityDate; collateralCid
+        borrower; lender = lenderB; principal; maturityDate
 
       getPayoffAmount = principal
-      getCollateralCid = collateralCid

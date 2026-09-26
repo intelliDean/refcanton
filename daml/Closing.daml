@@ -119,21 +119,13 @@ template ClosingRequest
           recipient      = lenderA
           transferAmount = 1000.0
 
-        -- Step 4: Disburse Lender B's funds to lenderA (returns any excess cash to lenderB)
-        (lenderBPaymentToA, pendingLoanB) <- exercise replacementOfferCid DisburseFunds with
-          recipientA = lenderA
+        -- Step 4: Atomically disburse Lender B funds, settle Loan A, and secure collateral to Loan B
+        (_lenderBPaymentToA, loanBCid) <- exercise replacementOfferCid DisburseAndSecure with
+          payoffQuoteCid
+          borrowerPaymentToA
+          currentCollateralCid = collateralCid
 
-        -- Step 5: Settle LoanA with verified payment cash and repledge collateral to Lender B
-        repledgedCollateralCid <- exercise payoffQuoteCid SettleAndRepledge with
-          newLocker       = lenderB
-          collateralCid   = collateralCid
-          paymentCashCids = [borrowerPaymentToA, lenderBPaymentToA]
-
-        -- Step 6: Secure and finalize LoanB (binds and consumes repledged collateral)
-        loanBCid <- exercise pendingLoanB SecureLoan with
-          collateralCid = repledgedCollateralCid
-
-        -- Step 7: Issue role-isolated receipts
+        -- Step 5: Issue role-isolated receipts
         now <- getTime
         receiptA <- create LenderAPayoffReceipt with
           borrower

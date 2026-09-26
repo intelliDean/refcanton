@@ -199,6 +199,23 @@ export class CantonLedgerState {
     return req;
   }
 
+  getClosingRequest(requestId: string): ClosingRequest | undefined {
+    return this.store.closingRequests.find(r => r.contractId === requestId);
+  }
+
+  validateClosingPrerequisites(requestId: string, borrower: string): void {
+    AtomicClosingCoordinator.validatePrerequisites(
+      requestId,
+      borrower,
+      this.store.closingRequests,
+      this.store.payoffQuotes,
+      this.store.replacementOffers,
+      this.store.cashHoldings,
+      this.store.loansA,
+      this.store.lockedCollaterals
+    );
+  }
+
   cancelClosingRequest(requestId: string, borrower: string = DEFAULT_PARTIES.BORROWER): void {
     const idx = this.store.closingRequests.findIndex(r => r.contractId === requestId && r.borrower === borrower);
     if (idx === -1) throw new Error('ClosingRequest not found or unauthorized');
@@ -210,8 +227,11 @@ export class CantonLedgerState {
   // ───────────────────────────────────────────────────────────────────────────
   // BORROWER: ATOMIC CLOSING EXECUTION
   // ───────────────────────────────────────────────────────────────────────────
-  executeAtomicClose(requestId?: string, borrower: string = DEFAULT_PARTIES.BORROWER, cantonUpdateId?: string): AtomicCloseResult {
-    const targetRequestId = requestId || this.store.closingRequests.find(r => r.borrower === borrower)?.contractId || '';
+  executeAtomicClose(requestId: string, borrower: string = DEFAULT_PARTIES.BORROWER, cantonUpdateId?: string): AtomicCloseResult {
+    if (!requestId || typeof requestId !== 'string') {
+      throw new Error('Valid requestId is required to execute atomic closing');
+    }
+    const targetRequestId = requestId;
     // 1. Validate all prerequisites and preconditions
     const ctx = AtomicClosingCoordinator.validatePrerequisites(
       targetRequestId,

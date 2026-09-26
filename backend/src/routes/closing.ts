@@ -40,7 +40,7 @@ closingRouter.post('/execute', requireParty(DEFAULT_PARTIES.BORROWER), async (re
     const { requestId } = req.body;
     const borrower = req.authenticatedParty || DEFAULT_PARTIES.BORROWER;
 
-    // 1. Verify Canton node health first
+    // 1. Verify Canton node health (Fail-closed: reject settlement when Canton is unavailable)
     const health = await cantonClient.checkHealth();
     if (!health.online) {
       res.status(503).json({
@@ -50,15 +50,41 @@ closingRouter.post('/execute', requireParty(DEFAULT_PARTIES.BORROWER), async (re
       return;
     }
 
-    // 2. Submit live Canton settlement
-    const result = await cantonClient.executeAtomicClosingOnCanton();
-
-    // 3. Sync domain facade store for backward-compatible queries
-    try {
-      ledger.executeAtomicClose(requestId, borrower, result.updateId);
-    } catch {
-      // Canton transaction has precedence
+    // 2. Enforce required, non-empty requestId
+    if (!requestId || typeof requestId !== 'string') {
+      res.status(400).json({
+        error: 'INVALID_REQUEST',
+        message: 'Valid requestId string is required to execute atomic closing.',
+      });
+      return;
     }
+
+    // 3. Look up closing request: reject nonexistent requests
+    const closingReq = ledger.getClosingRequest(requestId);
+    if (!closingReq) {
+      res.status(400).json({
+        error: 'REQUEST_NOT_FOUND',
+        message: `Closing request '${requestId}' does not exist on the ledger. Settlement rejected.`,
+      });
+      return;
+    }
+
+    if (closingReq.borrower !== borrower) {
+      res.status(403).json({
+        error: 'FORBIDDEN',
+        message: `Party '${borrower}' is not authorized to execute closing request '${requestId}' for borrower '${closingReq.borrower}'.`,
+      });
+      return;
+    }
+
+    // 4. Validate contract preconditions (sufficient equity, active quotes, unexpired terms)
+    ledger.validateClosingPrerequisites(requestId, borrower);
+
+    // 5. Submit live Canton settlement (strictly confirms genuine Canton update ID)
+    const result = await cantonClient.executeAtomicClosingOnCanton(requestId, borrower);
+
+    // 6. Sync domain facade store
+    ledger.executeAtomicClose(requestId, borrower, result.updateId);
 
     res.json(result);
   } catch (error: any) {
@@ -66,6 +92,6 @@ closingRouter.post('/execute', requireParty(DEFAULT_PARTIES.BORROWER), async (re
       res.status(503).json({ error: 'CANTON_OFFLINE', message: error.message });
       return;
     }
-    res.status(400).json({ error: error.message });
+    res.status(400).json({ error: error.message || 'Settlement failed' });
   }
 });
