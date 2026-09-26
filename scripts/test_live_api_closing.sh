@@ -170,14 +170,16 @@ if [ -z "$REQ_ID" ]; then
 fi
 echo "  ✓ Active ClosingRequest created: $REQ_ID"
 
-EXEC_RES=$(curl -s -f -H "Authorization: Bearer $TOKEN_BORROWER" \
+EXEC_STATUS_RAW=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -H "Authorization: Bearer $TOKEN_BORROWER" \
   -H "Content-Type: application/json" \
   -X POST "$API_BASE/api/closing/execute" \
   -d "{\"requestId\":\"$REQ_ID\"}")
-echo "  Closing execution response: $EXEC_RES"
+EXEC_RES=$(echo "$EXEC_STATUS_RAW" | grep -v "HTTP_STATUS")
+EXEC_STATUS=$(echo "$EXEC_STATUS_RAW" | grep "HTTP_STATUS" | cut -d':' -f2)
+echo "  Closing execution response (HTTP $EXEC_STATUS): $EXEC_RES"
 
-if ! echo "$EXEC_RES" | grep -q '"success":true'; then
-  echo "❌ Error: Atomic close execution failed"
+if [ "$EXEC_STATUS" -ne 200 ] || ! echo "$EXEC_RES" | grep -q '"success":true'; then
+  echo "❌ Error: Atomic close execution failed (HTTP $EXEC_STATUS): $EXEC_RES"
   exit 1
 fi
 

@@ -65,6 +65,11 @@ jobs:
         run: |
           ./scripts/test_live_api_closing.sh
 
+      - name: Dump Docker Logs on Failure
+        if: failure()
+        run: |
+          docker compose logs --tail=100
+
       - name: Teardown Docker Compose
         if: always()
         run: |

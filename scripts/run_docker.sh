@@ -64,8 +64,25 @@ while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
   sleep 2
 done
 
-if [ $CANTON_READY -eq 0 ]; then
-  echo "  ⚠️ Warning: Canton nodes took longer than expected to initialize. Check: docker compose logs canton-network"
+# Wait for participant party allocation bootstrap across synchronizer
+echo "  Waiting for multi-participant bootstrap & party allocation..."
+BOOTSTRAP_ATTEMPTS=45
+BOOTSTRAP_ATTEMPT=0
+BOOTSTRAP_READY=0
+
+while [ $BOOTSTRAP_ATTEMPT -lt $BOOTSTRAP_ATTEMPTS ]; do
+  BOOTSTRAP_ATTEMPT=$((BOOTSTRAP_ATTEMPT + 1))
+  P1_PARTIES=$(curl -s http://localhost:5014/v2/parties 2>/dev/null || echo "")
+  if echo "$P1_PARTIES" | grep -q "Borrower::" && echo "$P1_PARTIES" | grep -q "LenderA::" && echo "$P1_PARTIES" | grep -q "LenderB::"; then
+    BOOTSTRAP_READY=1
+    echo "  ✓ Topology bootstrapped: Borrower, LenderA, and LenderB parties active on Canton."
+    break
+  fi
+  sleep 2
+done
+
+if [ $BOOTSTRAP_READY -eq 0 ]; then
+  echo "  ⚠️ Warning: Multi-participant party allocation timed out. Check: docker compose logs canton-network"
 fi
 
 # Wait for backend app gateway readiness
@@ -83,7 +100,7 @@ done
 
 # 6. Initialize ledger fixtures on Canton if SDK available
 echo "[6/6] Confirming Canton ledger fixtures..."
-if [ -f "$HOME/.daml/bin/daml" ] && [ $CANTON_READY -eq 1 ]; then
+if [ -f "$HOME/.daml/bin/daml" ] && [ $BOOTSTRAP_READY -eq 1 ]; then
   echo "  Initializing ledger state with baseline contracts on Participant 1..."
   "$HOME/.daml/bin/daml" script \
     --dar "$REPO_ROOT/.daml/dist/ref-canton-0.0.1.dar" \

@@ -117,6 +117,11 @@ export class CantonClient {
     const parties = await this.getParties(port);
     const matched = parties.find(p => p.startsWith(`${partyHint}::`));
     if (matched) return matched;
+    if (port !== this.httpPort) {
+      const p1Parties = await this.getParties(this.httpPort);
+      const p1Matched = p1Parties.find(p => p.startsWith(`${partyHint}::`));
+      if (p1Matched) return p1Matched;
+    }
     return partyHint;
   }
 
