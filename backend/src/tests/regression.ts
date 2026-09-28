@@ -87,6 +87,15 @@ async function runRegressionTests() {
   console.log(' Running RefCanton Backend Security & Regression Test Suite');
   console.log('===================================================================');
 
+  // Ensure test credentials exist if running in a bare CI test environment without .env
+  if (!process.env.BORROWER_SECRET) {
+    process.env.AUTH_SECRET = process.env.AUTH_SECRET || 'refcanton-verified-hmac-auth-secret-key-2026';
+    process.env.BORROWER_SECRET = 'borrower-canton-sec-2026';
+    process.env.LENDER_A_SECRET = 'lendera-canton-sec-2026';
+    process.env.LENDER_B_SECRET = 'lenderb-canton-sec-2026';
+    process.env.OPERATOR_SECRET = 'operator-canton-sec-2026';
+  }
+
   // Set up ephemeral express app using unified apiRouter
   const app = express();
   app.use(cors());

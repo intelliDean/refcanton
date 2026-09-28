@@ -19,14 +19,30 @@ const VALID_PARTIES = new Set([
   DEFAULT_PARTIES.OPERATOR,
 ]);
 
-const AUTH_SECRET = process.env.AUTH_SECRET || 'refcanton-verified-secret-key-2026';
+export function getAuthSecret(): string {
+  return process.env.AUTH_SECRET || 'refcanton-verified-secret-key-2026';
+}
 
-export const PARTY_CREDENTIALS: Record<string, string> = {
-  [DEFAULT_PARTIES.BORROWER]: process.env.BORROWER_SECRET || '',
-  [DEFAULT_PARTIES.LENDER_A]: process.env.LENDER_A_SECRET || '',
-  [DEFAULT_PARTIES.LENDER_B]: process.env.LENDER_B_SECRET || '',
-  [DEFAULT_PARTIES.OPERATOR]: process.env.OPERATOR_SECRET || '',
-};
+export const PARTY_CREDENTIALS: Record<string, string> = new Proxy(
+  {},
+  {
+    get(_target, prop: string) {
+      if (prop === DEFAULT_PARTIES.BORROWER) return process.env.BORROWER_SECRET || '';
+      if (prop === DEFAULT_PARTIES.LENDER_A) return process.env.LENDER_A_SECRET || '';
+      if (prop === DEFAULT_PARTIES.LENDER_B) return process.env.LENDER_B_SECRET || '';
+      if (prop === DEFAULT_PARTIES.OPERATOR) return process.env.OPERATOR_SECRET || '';
+      return '';
+    },
+    has(_target, prop: string) {
+      return [
+        DEFAULT_PARTIES.BORROWER,
+        DEFAULT_PARTIES.LENDER_A,
+        DEFAULT_PARTIES.LENDER_B,
+        DEFAULT_PARTIES.OPERATOR,
+      ].includes(prop as any);
+    },
+  }
+);
 
 /**
  * Generates an HMAC-SHA256 cryptographically signed bearer token for a party.
@@ -38,7 +54,7 @@ export function generateVerifiedToken(party: string, expiresInMs: number = 86400
   const expiry = Date.now() + expiresInMs;
   const payload = `${party}:${expiry}`;
   const payloadB64 = Buffer.from(payload, 'utf8').toString('base64url');
-  const sig = crypto.createHmac('sha256', AUTH_SECRET).update(payload).digest('hex');
+  const sig = crypto.createHmac('sha256', getAuthSecret()).update(payload).digest('hex');
   return `rfc.${payloadB64}.${sig}`;
 }
 
@@ -72,7 +88,7 @@ export function verifyPartyToken(token: string): string | null {
     return null;
   }
 
-  const expectedSig = crypto.createHmac('sha256', AUTH_SECRET).update(payload).digest('hex');
+  const expectedSig = crypto.createHmac('sha256', getAuthSecret()).update(payload).digest('hex');
   if (sig.length !== expectedSig.length) {
     return null;
   }

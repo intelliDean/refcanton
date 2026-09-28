@@ -54,6 +54,12 @@ jobs:
           npm run backend:build
 
       - name: Run Backend Security & Access Control Regression Tests
+        env:
+          AUTH_SECRET: refcanton-verified-hmac-auth-secret-key-2026
+          BORROWER_SECRET: borrower-canton-sec-2026
+          LENDER_A_SECRET: lendera-canton-sec-2026
+          LENDER_B_SECRET: lenderb-canton-sec-2026
+          OPERATOR_SECRET: operator-canton-sec-2026
         run: |
           npm run backend:test
 
