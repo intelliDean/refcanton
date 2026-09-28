@@ -114,19 +114,31 @@ template ClosingRequest
         assertMsg "Collateral match: offer matches loan collateral units"
           (offer.collateralUnits == 150.0)
 
+        now <- getTime
+
         -- Step 3: Transfer borrower's 1,000 contribution to lenderA
-        (borrowerPaymentToA, _) <- exercise borrowerCashCid TransferPartial with
+        (_borrowerPaymentToA, _) <- exercise borrowerCashCid TransferPartial with
           recipient      = lenderA
           transferAmount = 1000.0
 
-        -- Step 4: Atomically disburse Lender B funds, settle Loan A, and secure collateral to Loan B
-        (_lenderBPaymentToA, loanBCid) <- exercise replacementOfferCid DisburseAndSecure with
+        -- Step 4: Issue PaymentEvidence from Borrower to Lender A bound to loanACid
+        borrowerEvidenceCid <- create PaymentEvidence with
+          loanACid   = loanACid
+          lenderA    = lenderA
+          payer      = borrower
+          borrower   = borrower
+          operator   = operator
+          instrument = quote.instrument
+          amount     = 1000.0
+          settledAt  = now
+
+        -- Step 5: Atomically disburse Lender B funds, settle Loan A, and secure collateral to Loan B
+        (_lenderBEvidence, loanBCid) <- exercise replacementOfferCid DisburseAndSecure with
           payoffQuoteCid
-          borrowerPaymentToA
+          borrowerEvidenceCid
           currentCollateralCid = collateralCid
 
-        -- Step 5: Issue role-isolated receipts
-        now <- getTime
+        -- Step 6: Issue role-isolated receipts
         receiptA <- create LenderAPayoffReceipt with
           borrower
           lenderA

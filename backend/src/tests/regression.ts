@@ -9,14 +9,14 @@
 import http from 'http';
 import express from 'express';
 import cors from 'cors';
-import { stateRouter } from '../routes/state';
-import { quotesRouter } from '../routes/quotes';
-import { offersRouter } from '../routes/offers';
-import { closingRouter } from '../routes/closing';
+import dotenv from 'dotenv';
+import { apiRouter } from '../routes';
 import { cantonClient } from '../services/cantonClient';
 import { ledger } from '../ledger';
-import { generateVerifiedToken } from '../middleware/auth';
+import { generateVerifiedToken, PARTY_CREDENTIALS } from '../middleware/auth';
 import { DEFAULT_PARTIES } from '../config/constants';
+
+dotenv.config();
 
 // Helper to make HTTP requests against a local test server
 function request(
@@ -87,21 +87,62 @@ async function runRegressionTests() {
   console.log(' Running RefCanton Backend Security & Regression Test Suite');
   console.log('===================================================================');
 
-  // Set up ephemeral express app
+  // Set up ephemeral express app using unified apiRouter
   const app = express();
   app.use(cors());
   app.use(express.json());
-  app.use('/api', stateRouter);
-  app.use('/api/quotes', quotesRouter);
-  app.use('/api/offers', offersRouter);
-  app.use('/api/closing', closingRouter);
+  app.use('/api', apiRouter);
 
   const server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
 
   try {
+    // ─────────────────────────────────────────────────────────────────────────
+    // TEST 0: Public Credential Bypass Closure & Verified Token Issuance
+    // ─────────────────────────────────────────────────────────────────────────
+    console.log('\n[TEST 0] Verifying Public Credential Bypass Closure & Verified Auth...');
+
+    // 0a: Verify GET /api/auth/demo-tokens is strictly disabled (HTTP 403)
+    const res0_demo = await request(server, 'GET', '/api/auth/demo-tokens');
+    assert(res0_demo.status === 403, 'GET /api/auth/demo-tokens returns HTTP 403 ENDPOINT_DISABLED');
+    assert(res0_demo.data.error === 'ENDPOINT_DISABLED', 'Error code is ENDPOINT_DISABLED');
+    assert(
+      !res0_demo.data.tokens,
+      'No tokens are exposed to anonymous callers via demo-tokens'
+    );
+
+    // 0b: Verify POST /api/auth/token rejects invalid or missing credentials
+    const res0_missing = await request(server, 'POST', '/api/auth/token', {}, {});
+    assert(res0_missing.status === 400, 'POST /api/auth/token without party returns HTTP 400');
+
+    const res0_unknown = await request(server, 'POST', '/api/auth/token', {}, { party: 'EvilHacker', secret: '123' });
+    assert(res0_unknown.status === 401, 'POST /api/auth/token with unknown party returns HTTP 401');
+
+    const res0_wrong_secret = await request(server, 'POST', '/api/auth/token', {}, {
+      party: DEFAULT_PARTIES.BORROWER,
+      secret: 'wrong-guess-12345',
+    });
+    assert(res0_wrong_secret.status === 401, 'POST /api/auth/token with invalid secret returns HTTP 401');
+    assert(res0_wrong_secret.data.error === 'INVALID_CREDENTIALS', 'Error code is INVALID_CREDENTIALS');
+
+    // 0c: Verify verified credential token issuance for each party
+    const borrowerSecret = PARTY_CREDENTIALS[DEFAULT_PARTIES.BORROWER];
+    const res0_auth_borrower = await request(server, 'POST', '/api/auth/token', {}, {
+      party: DEFAULT_PARTIES.BORROWER,
+      secret: borrowerSecret,
+    });
+    assert(res0_auth_borrower.status === 200, 'POST /api/auth/token succeeds with valid secret for Borrower');
+    assert(res0_auth_borrower.data.token && typeof res0_auth_borrower.data.token === 'string', 'Returns verified token string');
+
+    // Verify token verification endpoint
+    const res0_verify = await request(server, 'GET', '/api/auth/verify', {
+      Authorization: `Bearer ${res0_auth_borrower.data.token}`,
+    });
+    assert(res0_verify.status === 200, 'GET /api/auth/verify confirms valid token');
+    assert(res0_verify.data.party === DEFAULT_PARTIES.BORROWER, 'Verified token resolves to Borrower party');
+
     // Generate verified cryptographic tokens
-    const tokenBorrower = generateVerifiedToken(DEFAULT_PARTIES.BORROWER);
+    const tokenBorrower = res0_auth_borrower.data.token;
     const tokenLenderA = generateVerifiedToken(DEFAULT_PARTIES.LENDER_A);
     const tokenLenderB = generateVerifiedToken(DEFAULT_PARTIES.LENDER_B);
     const tokenOperator = generateVerifiedToken(DEFAULT_PARTIES.OPERATOR);
@@ -244,7 +285,7 @@ async function runRegressionTests() {
     assert(res6c.status === 200, 'GET /api/status returns HTTP 200 without authentication');
 
     console.log('\n===================================================================');
-    console.log(' ALL 6 BACKEND REGRESSION & SECURITY TESTS PASSED SUCCESSFULLY! ✓');
+    console.log(' ALL 7 BACKEND REGRESSION & SECURITY TESTS PASSED SUCCESSFULLY! ✓');
     console.log('===================================================================');
   } finally {
     server.close();

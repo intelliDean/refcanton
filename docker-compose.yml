@@ -56,6 +56,11 @@ services:
       - CANTON_PARTICIPANT2_PORT=5021
       - CANTON_PARTICIPANT3_HOST=canton-network
       - CANTON_PARTICIPANT3_PORT=5031
+      - AUTH_SECRET=refcanton-verified-hmac-auth-secret-key-2026
+      - BORROWER_SECRET=borrower-canton-sec-2026
+      - LENDER_A_SECRET=lendera-canton-sec-2026
+      - LENDER_B_SECRET=lenderb-canton-sec-2026
+      - OPERATOR_SECRET=operator-canton-sec-2026
     depends_on:
       - canton-network
     restart: unless-stopped

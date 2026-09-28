@@ -204,19 +204,30 @@ testPaymentFreeReleaseFails = script do
       instrument        = "USD-TEST"
       expiresAt         = tExpiry
 
-  -- Attempt 1: Empty payment cash list
+  -- Attempt 1: Empty payment evidence list
   submitMustFail borrower do
     exerciseCmd payoffQuoteCid SettleAndRepledge with
-      newLocker       = lenderB
-      collateralCid   = state.collateralCid
-      paymentCashCids = []
+      newLocker           = lenderB
+      collateralCid       = state.collateralCid
+      paymentEvidenceCids = []
 
-  -- Attempt 2: Payment cash owned by borrower instead of lenderA
+  -- Attempt 2: Payment evidence payable to borrower instead of lenderA
+  fakeEvidenceCid <- submit borrower do
+    createCmd PaymentEvidence with
+      loanACid   = state.loanACid
+      lenderA    = borrower
+      payer      = borrower
+      borrower   = borrower
+      operator   = operator
+      instrument = "USD-TEST"
+      amount     = 101000.0
+      settledAt  = t0
+
   submitMustFail borrower do
     exerciseCmd payoffQuoteCid SettleAndRepledge with
-      newLocker       = lenderB
-      collateralCid   = state.collateralCid
-      paymentCashCids = [state.borrowerCashCid]
+      newLocker           = lenderB
+      collateralCid       = state.collateralCid
+      paymentEvidenceCids = [fakeEvidenceCid]
 
 
 -- 2.2: Correct asset name with wrong issuer MUST FAIL
@@ -691,22 +702,27 @@ testDuplicatePaymentCashFails = script do
   setTime t0
 
   state <- initializeLedger
-  let TestParties{borrower, lenderA, lenderB} = state.parties
+  let TestParties{operator, borrower, lenderA, lenderB} = state.parties
   approvals <- setupApprovals state.parties state tExpiry
 
-  -- Transfer partial payment to lenderA (e.g. $1,000)
-  (cashForA, _) <- submit borrower do
-    exerciseCmd state.borrowerCashCid TransferPartial with
-      recipient      = lenderA
-      transferAmount = 1000.0
+  ev <- submit borrower do
+    createCmd PaymentEvidence with
+      loanACid   = state.loanACid
+      lenderA    = lenderA
+      payer      = borrower
+      borrower   = borrower
+      operator   = operator
+      instrument = "USD-TEST"
+      amount     = 101000.0
+      settledAt  = t0
 
-  -- Borrower attempts to pass duplicate payment cash IDs [cashForA, cashForA]
+  -- Borrower attempts to pass duplicate payment evidence IDs [ev, ev]
   -- Must fail with duplicate detection
   submitMustFail borrower do
     exerciseCmd approvals.payoffQuoteCid SettleAndRepledge with
-      newLocker       = lenderB
-      collateralCid   = state.collateralCid
-      paymentCashCids = [cashForA, cashForA]
+      newLocker           = lenderB
+      collateralCid       = state.collateralCid
+      paymentEvidenceCids = [ev, ev]
 
 
 testReusedPaymentCashFails : Script ()
@@ -735,12 +751,74 @@ testReusedPaymentCashFails = script do
   _ <- submit borrower do
     exerciseCmd closingRequestCid Execute
 
-  -- Attempting to reuse the consumed borrower cash holding or quotes in another settlement must fail
+  -- Verify Lender A received spendable cash holding (101,000 total)
+  lenderACashList <- query @CashHolding lenderA
+  let lenderATotalCash = sum (map (\(_, c) -> c.amount) lenderACashList)
+  assertMsg "Lender A must have 101,000 spendable cash from settlement" (lenderATotalCash == 101000.0)
+
+  -- Now create a fresh second loan (Loan A2) and fresh quote for Loan A2
+  unlockedCollat2 <- submit (actAs [operator, borrower]) do
+    createCmd CollateralHolding with
+      owner      = borrower
+      operator
+      instrument = "COLLAT-TEST"
+      amount     = 150.0
+
+  lockedCollat2 <- submit borrower do
+    exerciseCmd unlockedCollat2 Lock with
+      locker  = lenderA
+      context = "LoanA2-collateral"
+
+  offerA2 <- submit lenderA do
+    createCmd LoanAOffer with
+      lenderA
+      borrower
+      operator
+      principal       = 101000.0
+      maturityDate    = date 2028 Dec 31
+      collateralCid   = lockedCollat2
+      annualRate      = 0.085
+      originationDate = date 2025 Jan 1
+
+  loanA2Cid <- submit borrower do
+    exerciseCmd offerA2 AcceptLoanA
+
+  payoffQuote2Cid <- submit lenderA do
+    createCmd PayoffQuote with
+      lenderA
+      borrower
+      expectedOperator  = operator
+      expectedRecipient = lenderA
+      expectedLocker    = lenderB
+      loanACid          = loanA2Cid
+      payoffAmount      = 101000.0
+      instrument        = "USD-TEST"
+      expiresAt         = tExpiry
+
+  -- Attempt 1: Borrower attempts to reuse evidence bound to the previous loan (state.loanACid)
+  staleEvidenceCid <- submit borrower do
+    createCmd PaymentEvidence with
+      loanACid   = state.loanACid  -- Bound to old archived Loan A!
+      lenderA
+      payer      = borrower
+      borrower
+      operator
+      instrument = "USD-TEST"
+      amount     = 101000.0
+      settledAt  = t0
+
   submitMustFail borrower do
-    exerciseCmd approvals.payoffQuoteCid SettleAndRepledge with
-      newLocker       = lenderB
-      collateralCid   = state.collateralCid
-      paymentCashCids = [state.borrowerCashCid]
+    exerciseCmd payoffQuote2Cid SettleAndRepledge with
+      newLocker           = lenderB
+      collateralCid       = lockedCollat2
+      paymentEvidenceCids = [staleEvidenceCid]
+
+  -- Attempt 2: Borrower attempts to claim payment using empty evidence (hoping previous replacement holding is implicitly accepted)
+  submitMustFail borrower do
+    exerciseCmd payoffQuote2Cid SettleAndRepledge with
+      newLocker           = lenderB
+      collateralCid       = lockedCollat2
+      paymentEvidenceCids = []
 
 
 testDisbursementRequiresCollateralSecuring : Script ()
@@ -753,10 +831,16 @@ testDisbursementRequiresCollateralSecuring = script do
   let TestParties{operator, borrower, lenderA, lenderB} = state.parties
   approvals <- setupApprovals state.parties state tExpiry
 
-  (borrowerPaymentToA, _) <- submit borrower do
-    exerciseCmd state.borrowerCashCid TransferPartial with
-      recipient      = lenderA
-      transferAmount = 1000.0
+  borrowerEvidenceCid <- submit borrower do
+    createCmd PaymentEvidence with
+      loanACid   = state.loanACid
+      lenderA    = lenderA
+      payer      = borrower
+      borrower   = borrower
+      operator   = operator
+      instrument = "USD-TEST"
+      amount     = 1000.0
+      settledAt  = t0
 
   -- Create an unpledged dummy collateral holding not locked to lenderA
   unlockedCollat <- submit (actAs [operator, borrower]) do
@@ -775,7 +859,7 @@ testDisbursementRequiresCollateralSecuring = script do
   submitMustFail borrower do
     exerciseCmd approvals.replacementOfferCid DisburseAndSecure with
       payoffQuoteCid       = approvals.payoffQuoteCid
-      borrowerPaymentToA
+      borrowerEvidenceCid
       currentCollateralCid = dummyLockedCollat
 
 

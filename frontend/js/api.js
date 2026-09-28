@@ -4,29 +4,36 @@
 const API_BASE = '/api';
 
 export class ApiClient {
-  static tokens = {};
+  static tokens = {
+    Borrower: sessionStorage.getItem('refcanton_token_Borrower') || '',
+    LenderA: sessionStorage.getItem('refcanton_token_LenderA') || '',
+    LenderB: sessionStorage.getItem('refcanton_token_LenderB') || '',
+    Operator: sessionStorage.getItem('refcanton_token_Operator') || '',
+  };
   static currentParty = 'Borrower';
-  static authInitPromise = null;
 
-  static async initAuth() {
-    if (this.authInitPromise) return this.authInitPromise;
-    this.authInitPromise = (async () => {
-      try {
-        const res = await fetch(`${API_BASE}/auth/demo-tokens`);
-        if (res.ok) {
-          const data = await res.json();
-          this.tokens = {
-            Borrower: data.tokens.borrower,
-            LenderA: data.tokens.lenderA,
-            LenderB: data.tokens.lenderB,
-            Operator: data.tokens.operator,
-          };
-        }
-      } catch (err) {
-        console.warn('Could not bootstrap demo tokens:', err.message);
-      }
-    })();
-    return this.authInitPromise;
+  static isAuthenticated(party = this.currentParty) {
+    return Boolean(this.tokens[party]);
+  }
+
+  static async authenticateParty(party, secret) {
+    const res = await fetch(`${API_BASE}/auth/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ party, secret }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.token) {
+      throw new Error(data.message || data.error || 'Authentication failed');
+    }
+    this.tokens[party] = data.token;
+    sessionStorage.setItem(`refcanton_token_${party}`, data.token);
+    return data.token;
+  }
+
+  static logout(party = this.currentParty) {
+    this.tokens[party] = '';
+    sessionStorage.removeItem(`refcanton_token_${party}`);
   }
 
   static setParty(party) {
@@ -35,10 +42,6 @@ export class ApiClient {
 
   static async request(endpoint, options = {}) {
     try {
-      // Ensure verified authentication credentials are initialized
-      if (!this.tokens.Borrower) {
-        await this.initAuth();
-      }
 
       // Determine required party identity for endpoint
       let actingParty = options.party || this.currentParty;

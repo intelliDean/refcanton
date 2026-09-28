@@ -14,6 +14,13 @@ import {
 import { renderBorrowerView, requestAndExecuteClose } from './js/views/borrowerView.js';
 import { renderLenderAView, issuePayoffQuote, withdrawPayoffQuote } from './js/views/lenderAView.js';
 import { renderLenderBView, issueReplacementOffer, withdrawReplacementOffer } from './js/views/lenderBView.js';
+import {
+  toggleAuthModal,
+  submitAuth,
+  updateAuthBadge,
+  setTestSecret,
+  updateSecretPlaceholder,
+} from './js/components/authModal.js';
 
 let currentRole = 'Borrower';
 let currentLedgerState = null;
@@ -21,6 +28,10 @@ let pollInterval = null;
 
 // Attach handlers to window for inline onclick handlers in HTML
 window.setRole = setRole;
+window.toggleAuthModal = toggleAuthModal;
+window.submitAuth = () => submitAuth(fetchState);
+window.setTestSecret = setTestSecret;
+window.updateSecretPlaceholder = updateSecretPlaceholder;
 window.togglePrivacyInspector = togglePrivacyInspector;
 window.toggleTxModal = toggleTxModal;
 window.toggleSimulationModal = toggleSimulationModal;
@@ -36,6 +47,8 @@ window.resetLedger = resetLedger;
 
 // Lifecycle Initialization
 document.addEventListener('DOMContentLoaded', () => {
+  ApiClient.setParty(currentRole);
+  updateAuthBadge();
   fetchState();
   pollInterval = setInterval(fetchState, 2500);
 });
@@ -43,6 +56,8 @@ document.addEventListener('DOMContentLoaded', () => {
 // Role Switcher
 export function setRole(role) {
   currentRole = role;
+  ApiClient.setParty(role);
+  updateAuthBadge();
 
   // Update tabs
   document.querySelectorAll('.role-btn').forEach(b => b.classList.remove('active'));

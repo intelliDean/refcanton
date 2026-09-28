@@ -3,7 +3,10 @@
 
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
+import dotenv from 'dotenv';
 import { DEFAULT_PARTIES } from '../config/constants';
+
+dotenv.config();
 
 export interface AuthenticatedRequest extends Request {
   authenticatedParty?: string;
@@ -19,10 +22,10 @@ const VALID_PARTIES = new Set([
 const AUTH_SECRET = process.env.AUTH_SECRET || 'refcanton-verified-secret-key-2026';
 
 export const PARTY_CREDENTIALS: Record<string, string> = {
-  [DEFAULT_PARTIES.BORROWER]: process.env.BORROWER_SECRET || 'borrower-canton-sec-2026',
-  [DEFAULT_PARTIES.LENDER_A]: process.env.LENDER_A_SECRET || 'lendera-canton-sec-2026',
-  [DEFAULT_PARTIES.LENDER_B]: process.env.LENDER_B_SECRET || 'lenderb-canton-sec-2026',
-  [DEFAULT_PARTIES.OPERATOR]: process.env.OPERATOR_SECRET || 'operator-canton-sec-2026',
+  [DEFAULT_PARTIES.BORROWER]: process.env.BORROWER_SECRET || '',
+  [DEFAULT_PARTIES.LENDER_A]: process.env.LENDER_A_SECRET || '',
+  [DEFAULT_PARTIES.LENDER_B]: process.env.LENDER_B_SECRET || '',
+  [DEFAULT_PARTIES.OPERATOR]: process.env.OPERATOR_SECRET || '',
 };
 
 /**

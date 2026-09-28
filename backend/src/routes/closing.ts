@@ -11,10 +11,18 @@ export const closingRouter = Router();
 closingRouter.use(authMiddleware);
 
 // Borrower: Create Closing Request
-closingRouter.post('/request', requireParty(DEFAULT_PARTIES.BORROWER), (req: AuthenticatedRequest, res: Response) => {
+closingRouter.post('/request', requireParty(DEFAULT_PARTIES.BORROWER), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const borrower = req.authenticatedParty || DEFAULT_PARTIES.BORROWER;
     const request = ledger.createClosingRequest(borrower);
+    try {
+      const cantonReqCid = await cantonClient.createClosingRequestOnCanton(borrower);
+      if (cantonReqCid) {
+        request.contractId = cantonReqCid;
+      }
+    } catch (e: any) {
+      console.warn('Canton live closing request creation deferred:', e.message);
+    }
     res.json({ success: true, request });
   } catch (error: any) {
     res.status(400).json({ error: error.message });

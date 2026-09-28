@@ -3,7 +3,7 @@
 
 [![CI](https://github.com/intelliDean/refcanton/actions/workflows/ci.yml/badge.svg)](https://github.com/intelliDean/refcanton/actions/workflows/ci.yml)
 [![Daml Tests](https://img.shields.io/badge/Daml%20Tests-21%20Passed%20(100%25)-brightgreen.svg)]()
-[![Backend Tests](https://img.shields.io/badge/Backend%20Tests-6%20Passed%20(100%25)-brightgreen.svg)]()
+[![Backend Tests](https://img.shields.io/badge/Backend%20Tests-7%20Passed%20(100%25)-brightgreen.svg)]()
 [![Canton Evidence](https://img.shields.io/badge/Canton%20Evidence-Verified%20Update%20ID-blue.svg)](EVIDENCE.md)
 [![Daml SDK](https://img.shields.io/badge/Daml%20SDK-3.4.11-blue.svg)]()
 [![Canton](https://img.shields.io/badge/Canton-Network%20Enabled-blueviolet.svg)]()
@@ -135,13 +135,13 @@ Execute the Daml contract tests and backend security regression suite:
 ```bash
 npm test
 ```
-**Test Coverage Includes (21 Daml Tests + 6 Backend Security Tests):**
+**Test Coverage Includes (21 Daml Tests + 7 Backend Security Tests):**
 - **Smart Contract Security & Invariants**:
   - `testRefinancingLifecycle`: Complete happy-path atomic swap and balance verification.
   - `testUnauthorizedCollateralReleaseFails`: Rejects attempts to unlock collateral without lender authorization.
   - `testPaymentFreeReleaseFails`: Rejects collateral release through quotes if payment cash is omitted.
   - `testDuplicatePaymentCashFails`: Rejects attempts to duplicate payment cash contract IDs in settlement payments.
-  - `testReusedPaymentCashFails`: Rejects attempts to reuse already-settled cash holdings across multiple settlements.
+  - `testReusedPaymentCashFails`: Rejects attempts to reuse already-settled cash holdings or past evidence across fresh loans/settlements (Anti-Replay).
   - `testDisbursementRequiresCollateralSecuring`: Proves replacement funds cannot disburse independently without securing collateral.
   - `testBoundCollateralExclusivelyLocked`: Verifies bound collateral cannot be re-pledged or double-attached to multiple loans.
   - `testWrongAssetFails`: Rejects settlement when counterfeit or unexpected asset instruments are used.
@@ -153,9 +153,10 @@ npm test
   - `testQuoteRevocationFails`, `testOfferWithdrawalFails`, `testBorrowerCancelFails`: Choice authorization rules.
   - `auditParticipant2` & `auditParticipant3`: Multi-participant sub-transaction privacy assertions.
 - **Backend API, Cryptographic Authentication & Security Tests**:
-  - HTTP 401 unauthenticated request rejection across all endpoints.
+  - Closure of public credential bypass (`GET /api/auth/demo-tokens` strictly disabled with HTTP 403 `ENDPOINT_DISABLED`; anonymous users cannot obtain privileged tokens).
+  - Verified party credential authentication (`POST /api/auth/token`) issuing cryptographically signed HMAC-SHA256 bearer tokens with timing-safe comparison.
+  - HTTP 401 unauthenticated request rejection across all secured endpoints.
   - Rejection of forged `Bearer admin` backdoor and caller-selected `X-Party-Id` spoofing without HMAC-SHA256 signature.
-  - Cryptographically verified HMAC-SHA256 bearer tokens with timing-safe comparison.
   - HTTP 403 cross-party snooping rejection (e.g. Borrower accessing Lender A state, Lender A accessing Lender B).
   - Authenticated party-isolated transaction history filtering (zero competitor leak).
   - HTTP 503 fail-closed rejection when Canton ledger nodes are offline.
@@ -166,7 +167,7 @@ With the cluster running, execute the end-to-end integration test through the HT
 ```bash
 ./scripts/test_live_api_closing.sh
 ```
-This tests genuine cryptographic authentication, quote issuance, offer commitment, atomic closing submitted directly to Canton (`POST /v2/commands/submit-and-wait`) returning a committed `updateId`, confirms the exact transaction via `/v2/updates/transaction-by-id`, and verifies post-closing privacy across isolated lender sessions on both active state and transaction history.
+This tests genuine cryptographic authentication, quote issuance, offer commitment, genuine atomic closing submitted directly to Canton (`ClosingRequest.Execute`) returning a committed `updateId`, confirms the exact transaction on Canton, and queries Canton participant nodes directly (Participant 2 `:5024` for Lender A, Participant 3 `:5034` for Lender B) to verify that Lender A receives only the settlement of Loan A and Lender B receives only the funding of Loan B, while neither participant receives the other's private terms.
 
 ### Step 5: Start the Application
 ```bash

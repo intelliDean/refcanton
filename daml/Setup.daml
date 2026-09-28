@@ -80,9 +80,9 @@ initializeLedgerWithBorrowerCash borrowerCashAmount = script do
       locker  = lenderA
       context = "LoanA-collateral"
 
-  -- 4. Create LoanA (signatories: borrower, lenderA)
-  loanACid <- submit (actAs [borrower, lenderA]) do
-    createCmd LoanA with
+  -- 4. Create LoanA (via offer and accept so multi-participant works without multi-party actAs on single node)
+  loanAOfferCid <- submit lenderA do
+    createCmd LoanAOffer with
       borrower
       lenderA
       operator
@@ -91,6 +91,9 @@ initializeLedgerWithBorrowerCash borrowerCashAmount = script do
       collateralCid   = lockedCollateralCid
       annualRate      = 0.085
       originationDate = date 2024 Jun 30
+
+  loanACid <- submit borrower do
+    exerciseCmd loanAOfferCid AcceptLoanA
 
   return InitialLedgerState with
     parties

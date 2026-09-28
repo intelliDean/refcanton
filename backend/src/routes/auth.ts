@@ -41,16 +41,11 @@ authRouter.post('/token', (req: Request, res: Response) => {
   });
 });
 
-// Provide verified demo role tokens for initial web client session bootstrap
+// Public demo tokens endpoint is disabled to eliminate credential bypass
 authRouter.get('/demo-tokens', (_req: Request, res: Response) => {
-  res.json({
-    success: true,
-    tokens: {
-      borrower: generateVerifiedToken(DEFAULT_PARTIES.BORROWER),
-      lenderA: generateVerifiedToken(DEFAULT_PARTIES.LENDER_A),
-      lenderB: generateVerifiedToken(DEFAULT_PARTIES.LENDER_B),
-      operator: generateVerifiedToken(DEFAULT_PARTIES.OPERATOR),
-    },
+  res.status(403).json({
+    error: 'ENDPOINT_DISABLED',
+    message: 'Public demo-tokens endpoint is disabled. Anonymous visitors cannot obtain privileged tokens. Verified credentials are required per party via POST /api/auth/token.',
   });
 });
 

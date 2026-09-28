@@ -47,6 +47,12 @@
     </div>
 
     <div class="nav-right">
+      <div class="network-tag auth-tag unverified" id="authStatusBadge">
+        <span class="status-dot yellow"></span> 🔓 Unauthenticated
+      </div>
+      <button class="btn btn-outline" id="authBtn" onclick="toggleAuthModal()">
+        🔑 Authenticate
+      </button>
       <button class="btn btn-outline" id="simulationBtn" onclick="toggleSimulationModal()">
         🧪 Failure Simulator
       </button>
@@ -503,6 +509,53 @@
             </button>
           </div>
         </div>
+      </div>
+    </div>
+  <!-- Party Authentication Modal -->
+  <div class="modal" id="authModal">
+    <div class="modal-backdrop" onclick="toggleAuthModal(false)"></div>
+    <div class="modal-dialog modal-sm">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <span class="modal-icon">🔑</span>
+          <h3 class="modal-title">Verified Party Credentials</h3>
+        </div>
+        <button class="modal-close" onclick="toggleAuthModal(false)">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">
+          RefCanton requires cryptographically verified HMAC-signed credentials for each party. Anonymous visitors and caller-selected identities are rejected.
+        </p>
+
+        <div class="form-group">
+          <label class="form-label" for="authPartySelect">Select Party Identity</label>
+          <select id="authPartySelect" class="form-select" onchange="updateSecretPlaceholder()">
+            <option value="Borrower">Borrower (Alice)</option>
+            <option value="LenderA">Outgoing Lender A (LegacyBank)</option>
+            <option value="LenderB">Incoming Lender B (NeoCapital)</option>
+            <option value="Operator">Platform Operator</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="authSecretInput">Party Credential Secret</label>
+          <input type="password" id="authSecretInput" class="form-input" placeholder="Enter verified secret" />
+        </div>
+
+        <div class="test-credentials-box">
+          <span class="test-cred-label">Authorized Participant Credentials:</span>
+          <div class="test-cred-pills">
+            <button type="button" class="cred-pill" onclick="setTestSecret('borrower-canton-sec-2026')">Borrower Secret</button>
+            <button type="button" class="cred-pill" onclick="setTestSecret('lendera-canton-sec-2026')">Lender A Secret</button>
+            <button type="button" class="cred-pill" onclick="setTestSecret('lenderb-canton-sec-2026')">Lender B Secret</button>
+          </div>
+        </div>
+
+        <div id="authModalError" class="auth-error-banner" style="display: none;"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" onclick="toggleAuthModal(false)">Cancel</button>
+        <button class="btn btn-primary" onclick="submitAuth()">Log In & Verify</button>
       </div>
     </div>
   </div>

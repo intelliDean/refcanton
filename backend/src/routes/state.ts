@@ -71,8 +71,7 @@ stateRouter.get('/transactions/:updateId', authMiddleware, async (req: Authentic
   }
 });
 
-// System: Reset Demo Ledger (Restricted to Operator)
-stateRouter.post('/reset', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+stateRouter.post('/reset', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   if (req.authenticatedParty !== DEFAULT_PARTIES.OPERATOR) {
     res.status(403).json({
       error: 'FORBIDDEN',
@@ -82,5 +81,10 @@ stateRouter.post('/reset', authMiddleware, (req: AuthenticatedRequest, res: Resp
   }
 
   ledger.resetToInitialState();
+  try {
+    await cantonClient.bootstrapCantonLedger(true);
+  } catch (err: any) {
+    console.warn('Canton live bootstrap on reset deferred:', err.message);
+  }
   res.json({ success: true, message: 'Ledger reset to baseline fixed test state' });
 });

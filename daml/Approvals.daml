@@ -13,6 +13,32 @@ import Assets
 import Loan
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- PAYMENT EVIDENCE
+-- Single-use, loan-bound payment evidence produced during debt payoff.
+-- Guarantees that payment proof cannot be reused across fresh loans or settlements,
+-- while the recipient lender retains genuine spendable CashHolding.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+template PaymentEvidence
+  with
+    loanACid   : ContractId LoanA   -- strictly bound to the target LoanA contract
+    lenderA    : Party              -- recipient of payment
+    payer      : Party              -- borrower or funding lender
+    borrower   : Party              -- authorized borrower to consume evidence
+    operator   : Party
+    instrument : Text               -- "USD-TEST"
+    amount     : Decimal            -- amount paid towards payoff
+    settledAt  : Time
+  where
+    signatory payer
+    observer  lenderA, borrower
+
+    choice ConsumeEvidence : ()
+      controller borrower
+      do return ()
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- PAYOFF QUOTE
 -- LenderA's binding offer to release LoanA and repledge collateral upon receiving 101,000.
 -- Pins: exact loan state, exact amount, exact account, exact expiry.
@@ -46,29 +72,29 @@ template PayoffQuote
     -- and re-pledge the collateral to lenderB upon verified payment.
     choice SettleAndRepledge : ContractId LockedCollateralHolding
       with
-        newLocker       : Party
-        collateralCid   : ContractId LockedCollateralHolding
-        paymentCashCids : [ContractId CashHolding]
+        newLocker           : Party
+        collateralCid       : ContractId LockedCollateralHolding
+        paymentEvidenceCids : [ContractId PaymentEvidence]
       controller borrower
       do
         now <- getTime
         assertMsg "PayoffQuote has expired" (now < expiresAt)
-        assertMsg "Payment cash list cannot be empty" (not (null paymentCashCids))
-        assertMsg "Duplicate payment cash IDs not allowed" (dedup paymentCashCids == paymentCashCids)
+        assertMsg "Payment evidence list cannot be empty" (not (null paymentEvidenceCids))
+        assertMsg "Duplicate payment evidence IDs not allowed" (dedup paymentEvidenceCids == paymentEvidenceCids)
         assertMsg "Locker mismatch" (newLocker == expectedLocker)
 
-        payments <- mapA fetch paymentCashCids
-        forA_ payments $ \cash -> do
-          assertMsg "Payment cash must be owned by lenderA" (cash.owner == lenderA && cash.owner == expectedRecipient)
-          assertMsg "Payment cash operator mismatch" (cash.operator == expectedOperator)
-          assertMsg "Payment cash instrument mismatch" (cash.instrument == instrument)
+        evidences <- mapA fetch paymentEvidenceCids
+        forA_ evidences $ \ev -> do
+          assertMsg "Payment evidence must be bound to this loan" (ev.loanACid == loanACid)
+          assertMsg "Payment evidence must be payable to lenderA" (ev.lenderA == lenderA && ev.lenderA == expectedRecipient)
+          assertMsg "Payment evidence operator mismatch" (ev.operator == expectedOperator)
+          assertMsg "Payment evidence instrument mismatch" (ev.instrument == instrument)
 
-        let totalPaid = sum (map (\c -> c.amount) payments)
+        let totalPaid = sum (map (\e -> e.amount) evidences)
         assertMsg "Payment amount insufficient to satisfy payoff" (totalPaid >= payoffAmount)
 
-        -- Consume each payment cash holding to prevent reuse across settlements
-        forA_ paymentCashCids $ \cid -> do
-          exercise cid SettlePayment
+        -- Consume each payment evidence once (archive it via ConsumeEvidence)
+        forA_ paymentEvidenceCids (\cid -> exercise cid ConsumeEvidence)
 
         loanA <- fetch loanACid
         assertMsg "Payoff amount must match loan principal" (payoffAmount == loanA.principal)
@@ -116,10 +142,10 @@ template ReplacementOffer
     -- Signatory lenderB + controller borrower authorize transferring agreed principal
     -- to expectedRecipient ONLY while simultaneously securing and binding the repledged collateral.
     -- Eliminates independent disbursement without collateral securing.
-    choice DisburseAndSecure : (ContractId CashHolding, ContractId LoanB)
+    choice DisburseAndSecure : (ContractId PaymentEvidence, ContractId LoanB)
       with
         payoffQuoteCid       : ContractId PayoffQuote
-        borrowerPaymentToA   : ContractId CashHolding
+        borrowerEvidenceCid  : ContractId PaymentEvidence
         currentCollateralCid : ContractId LockedCollateralHolding
       controller borrower
       do
@@ -131,8 +157,11 @@ template ReplacementOffer
         assertMsg "Cash instrument mismatch" (bCash.instrument == cashInstrument)
         assertMsg "Cash operator mismatch" (bCash.operator == operator)
 
+        quote <- fetch payoffQuoteCid
+        assertMsg "Quote recipient must match offer recipient" (quote.expectedRecipient == expectedRecipient)
+
         -- 1. Transfer Lender B's funding to expected recipient (Lender A)
-        cashForA <- if bCash.amount == newPrincipal
+        _cashForA <- if bCash.amount == newPrincipal
           then exercise lenderBCashCid Transfer with
             recipient = expectedRecipient
           else do
@@ -141,21 +170,32 @@ template ReplacementOffer
               transferAmount = newPrincipal
             return transferred
 
-        -- 2. Settle PayoffQuote and re-pledge collateral to Lender B
+        -- 2. Issue PaymentEvidence from Lender B to Lender A bound to quote.loanACid
+        lenderBEvidenceCid <- create PaymentEvidence with
+          loanACid   = quote.loanACid
+          lenderA    = expectedRecipient
+          payer      = lenderB
+          borrower   = borrower
+          operator
+          instrument = cashInstrument
+          amount     = newPrincipal
+          settledAt  = now
+
+        -- 3. Settle PayoffQuote and re-pledge collateral to Lender B
         repledgedCollatCid <- exercise payoffQuoteCid SettleAndRepledge with
-          newLocker       = lenderB
-          collateralCid   = currentCollateralCid
-          paymentCashCids = [borrowerPaymentToA, cashForA]
+          newLocker           = lenderB
+          collateralCid       = currentCollateralCid
+          paymentEvidenceCids = [borrowerEvidenceCid, lenderBEvidenceCid]
 
         repledgedCollat <- fetch repledgedCollatCid
         assertMsg "Collateral amount must match offer" (repledgedCollat.amount == collateralUnits)
         assertMsg "Collateral instrument mismatch" (repledgedCollat.instrument == collateralInstrument)
 
-        -- 3. Exclusively bind collateral to Loan B (produces non-rebindable BoundCollateralHolding)
+        -- 4. Exclusively bind collateral to Loan B (produces non-rebindable BoundCollateralHolding)
         boundCollatCid <- exercise repledgedCollatCid BindToLoan with
           loanContext = "LoanB-collateral"
 
-        -- 4. Create Loan B
+        -- 5. Create Loan B
         loanB <- create LoanB with
           borrower
           lenderB
@@ -166,4 +206,4 @@ template ReplacementOffer
           capRate
           amortizationPeriods
 
-        return (cashForA, loanB)
+        return (lenderBEvidenceCid, loanB)

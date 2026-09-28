@@ -66,6 +66,29 @@ template LoanA
       getPayoffAmount = principal
 
 
+-- LoanAOffer: Lender A proposes the loan terms, allowing Borrower to accept on Participant 1
+-- Enables multi-participant ledger bootstrap without requiring multi-party actAs on a single node
+template LoanAOffer
+  with
+    borrower        : Party
+    lenderA         : Party
+    operator        : Party
+    principal       : Decimal
+    maturityDate    : Date
+    collateralCid   : ContractId LockedCollateralHolding
+    annualRate      : Decimal
+    originationDate : Date
+  where
+    signatory lenderA
+    observer  borrower
+
+    choice AcceptLoanA : ContractId LoanA
+      controller borrower
+      do
+        create LoanA with
+          borrower; lenderA; operator; principal; maturityDate; collateralCid; annualRate; originationDate
+
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- MODEL B — Amortizing Cap-Rate Facility
 -- Modern commercial facility with interest rate cap and monthly amortization.

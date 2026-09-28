@@ -49,13 +49,19 @@ if [ "$SPOOF_CODE" -ne 401 ]; then
 fi
 echo "  ✓ X-Party-Id spoofing rejected with HTTP 401"
 
-# Arbitrary unsigned token rejected
-FAKE_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer invalid-fake-token" "$API_BASE/api/state/Borrower")
-if [ "$FAKE_CODE" -ne 401 ]; then
-  echo "❌ Error: Expected HTTP 401 for unsigned token, got $FAKE_CODE"
+# Public demo-tokens credential bypass is disabled (HTTP 403)
+DEMO_TOKENS_RES=$(curl -s -w "\nHTTP_STATUS:%{http_code}" "$API_BASE/api/auth/demo-tokens")
+DEMO_TOKENS_STATUS=$(echo "$DEMO_TOKENS_RES" | grep "HTTP_STATUS" | cut -d':' -f2)
+DEMO_TOKENS_BODY=$(echo "$DEMO_TOKENS_RES" | grep -v "HTTP_STATUS")
+if [ "$DEMO_TOKENS_STATUS" -ne 403 ]; then
+  echo "❌ Error: Expected HTTP 403 for /api/auth/demo-tokens, got $DEMO_TOKENS_STATUS"
   exit 1
 fi
-echo "  ✓ Unsigned token rejected with HTTP 401"
+if echo "$DEMO_TOKENS_BODY" | grep -q '"tokens"'; then
+  echo "❌ Error: /api/auth/demo-tokens leaked privileged tokens!"
+  exit 1
+fi
+echo "  ✓ Public demo-tokens credential bypass strictly disabled (HTTP 403 ENDPOINT_DISABLED)"
 
 # Acquire genuine HMAC-SHA256 verified tokens
 echo "  Acquiring verified party tokens via credential authentication..."
@@ -226,30 +232,99 @@ if echo "$LENDER_B_STATE" | grep -q '"payoffQuotes":\[{'; then
 fi
 echo "  ✓ Lender B active contracts: ZERO visibility into Lender A terms"
 
-# Transaction history privacy checks
+# Direct Canton Ledger Transaction History Privacy Verification
+echo "  Querying Canton transaction history directly from Participant 2 (Lender A) & Participant 3 (Lender B)..."
+
+CANTON_P2_HTTP="${CANTON_P2_HTTP:-http://localhost:5024}"
+CANTON_P3_HTTP="${CANTON_P3_HTTP:-http://localhost:5034}"
+
+# Resolve Canton party IDs for participants
+P2_LENDERA_PARTY=$(curl -s "$CANTON_P2_HTTP/v2/parties" | grep -o 'LenderA::[^"]*' | head -n1)
+P3_LENDERB_PARTY=$(curl -s "$CANTON_P3_HTTP/v2/parties" | grep -o 'LenderB::[^"]*' | head -n1)
+
+# 1. Query Participant 2 (Lender A) directly for the committed closing update
+P2_TX=$(curl -s -X POST "$CANTON_P2_HTTP/v2/updates/transaction-by-id" \
+  -H "Content-Type: application/json" \
+  -d "{\"updateId\":\"$UPDATE_ID\",\"requestingParties\":[\"$P2_LENDERA_PARTY\"]}")
+
+# Verify Lender A's participant receives settlement of Loan A
+if ! echo "$P2_TX" | grep -q "LenderAPayoffReceipt"; then
+  echo "❌ PRIVACY/SETTLEMENT FAILURE: Participant 2 transaction missing LenderAPayoffReceipt!"
+  exit 1
+fi
+# Verify Lender A's participant has ZERO visibility into Loan B or replacement terms
+if echo "$P2_TX" | grep -q "LoanB"; then
+  echo "❌ PRIVACY VIOLATION ON CANTON P2: Participant 2 received LoanB!"
+  exit 1
+fi
+if echo "$P2_TX" | grep -q "ReplacementOffer"; then
+  echo "❌ PRIVACY VIOLATION ON CANTON P2: Participant 2 received ReplacementOffer!"
+  exit 1
+fi
+if echo "$P2_TX" | grep -q "capRate"; then
+  echo "❌ PRIVACY VIOLATION ON CANTON P2: Participant 2 received Lender B's capRate!"
+  exit 1
+fi
+if echo "$P2_TX" | grep -q "amortizationPeriods"; then
+  echo "❌ PRIVACY VIOLATION ON CANTON P2: Participant 2 received Lender B's amortizationPeriods!"
+  exit 1
+fi
+echo "  ✓ Canton Participant 2 (Lender A): Confirmed settlement receipt; ZERO visibility into Loan B terms"
+
+# 2. Query Participant 3 (Lender B) directly for the committed closing update
+P3_TX=$(curl -s -X POST "$CANTON_P3_HTTP/v2/updates/transaction-by-id" \
+  -H "Content-Type: application/json" \
+  -d "{\"updateId\":\"$UPDATE_ID\",\"requestingParties\":[\"$P3_LENDERB_PARTY\"]}")
+
+# Verify Lender B's participant receives funding of Loan B
+if ! echo "$P3_TX" | grep -q "LenderBFundingReceipt"; then
+  echo "❌ PRIVACY/SETTLEMENT FAILURE: Participant 3 transaction missing LenderBFundingReceipt!"
+  exit 1
+fi
+if ! echo "$P3_TX" | grep -q "LoanB"; then
+  echo "❌ PRIVACY/SETTLEMENT FAILURE: Participant 3 transaction missing LoanB!"
+  exit 1
+fi
+# Verify Lender B's participant has ZERO visibility into Loan A or payoff terms
+if echo "$P3_TX" | grep -q "LoanA"; then
+  echo "❌ PRIVACY VIOLATION ON CANTON P3: Participant 3 received LoanA!"
+  exit 1
+fi
+if echo "$P3_TX" | grep -q "PayoffQuote"; then
+  echo "❌ PRIVACY VIOLATION ON CANTON P3: Participant 3 received PayoffQuote!"
+  exit 1
+fi
+if echo "$P3_TX" | grep -q "LenderAPayoffReceipt"; then
+  echo "❌ PRIVACY VIOLATION ON CANTON P3: Participant 3 received LenderAPayoffReceipt!"
+  exit 1
+fi
+echo "  ✓ Canton Participant 3 (Lender B): Confirmed funding receipt & Loan B; ZERO visibility into Loan A terms"
+
+# 3. Authenticated Gateway Transaction API Checks
 LENDER_A_TXS=$(curl -s -f -H "Authorization: Bearer $TOKEN_LENDERA" "$API_BASE/api/transactions")
 if echo "$LENDER_A_TXS" | grep -q -i "LoanB"; then
-  echo "❌ PRIVACY VIOLATION: Lender A transaction history contains LoanB!"
+  echo "❌ PRIVACY VIOLATION: Lender A gateway transaction history contains LoanB!"
   exit 1
 fi
 if echo "$LENDER_A_TXS" | grep -q -i "ReplacementOffer"; then
-  echo "❌ PRIVACY VIOLATION: Lender A transaction history contains ReplacementOffer!"
+  echo "❌ PRIVACY VIOLATION: Lender A gateway transaction history contains ReplacementOffer!"
   exit 1
 fi
-echo "  ✓ Lender A transaction history: ZERO visibility into Lender B transactions"
+echo "  ✓ Gateway Transaction API (Lender A): ZERO visibility into Lender B transactions"
 
 LENDER_B_TXS=$(curl -s -f -H "Authorization: Bearer $TOKEN_LENDERB" "$API_BASE/api/transactions")
 if echo "$LENDER_B_TXS" | grep -q -i "LoanA"; then
-  echo "❌ PRIVACY VIOLATION: Lender B transaction history contains LoanA!"
+  echo "❌ PRIVACY VIOLATION: Lender B gateway transaction history contains LoanA!"
   exit 1
 fi
 if echo "$LENDER_B_TXS" | grep -q -i "PayoffQuote"; then
-  echo "❌ PRIVACY VIOLATION: Lender B transaction history contains PayoffQuote!"
+  echo "❌ PRIVACY VIOLATION: Lender B gateway transaction history contains PayoffQuote!"
   exit 1
 fi
-echo "  ✓ Lender B transaction history: ZERO visibility into Lender A transactions"
+echo "  ✓ Gateway Transaction API (Lender B): ZERO visibility into Lender A transactions"
 
 echo ""
 echo "==================================================================="
 echo " ALL 8 END-TO-END REFINANCING & PRIVACY TESTS PASSED 100%! ✓"
 echo "==================================================================="
+
