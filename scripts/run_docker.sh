@@ -7,6 +7,13 @@ set -e
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Ensure required deployment secrets are exported for docker compose if not already provided
+export AUTH_SECRET="${AUTH_SECRET:-refcanton-verified-hmac-auth-secret-key-2026}"
+export BORROWER_SECRET="${BORROWER_SECRET:-borrower-canton-sec-2026}"
+export LENDER_A_SECRET="${LENDER_A_SECRET:-lendera-canton-sec-2026}"
+export LENDER_B_SECRET="${LENDER_B_SECRET:-lenderb-canton-sec-2026}"
+export OPERATOR_SECRET="${OPERATOR_SECRET:-operator-canton-sec-2026}"
+
 echo "==================================================================="
 echo " RefCanton — Multi-Participant Canton Deployment & Verification"
 echo "==================================================================="
@@ -88,7 +95,7 @@ fi
 # Wait for backend app gateway readiness
 APP_READY=0
 ATTEMPT=0
-while [ $ATTEMPT -lt 15 ]; do
+while [ $ATTEMPT -lt 30 ]; do
   ATTEMPT=$((ATTEMPT + 1))
   if curl -s http://localhost:4000/api/status >/dev/null 2>&1; then
     APP_READY=1
@@ -97,6 +104,13 @@ while [ $ATTEMPT -lt 15 ]; do
   fi
   sleep 2
 done
+
+if [ $APP_READY -eq 0 ]; then
+  echo "❌ RefCanton App Service failed to become responsive at http://localhost:4000"
+  echo "Recent app logs:"
+  docker compose logs --tail=40 refcanton-app
+  exit 1
+fi
 
 # 6. Initialize ledger fixtures on Canton if SDK available
 echo "[6/6] Confirming Canton ledger fixtures..."

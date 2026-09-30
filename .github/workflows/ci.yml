@@ -6,9 +6,86 @@ on:
   pull_request:
     branches: [ main ]
 
+# Global deployment secrets used across all test suites and container environments
+env:
+  AUTH_SECRET: refcanton-verified-hmac-auth-secret-key-2026
+  BORROWER_SECRET: borrower-canton-sec-2026
+  LENDER_A_SECRET: lendera-canton-sec-2026
+  LENDER_B_SECRET: lenderb-canton-sec-2026
+  OPERATOR_SECRET: operator-canton-sec-2026
+
 jobs:
-  verify:
-    name: Build, Security & Integration Verification
+  # Job 1: Daml Smart Contracts Build & Verification Suite
+  daml-contracts:
+    name: Daml Smart Contracts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install Daml SDK 3.4.11
+        run: |
+          curl -sSL https://get.daml.com/ | sh -s 3.4.11
+          echo "$HOME/.daml/bin" >> $GITHUB_PATH
+
+      - name: Verify Daml SDK Installation
+        run: |
+          daml version
+
+      - name: Compile Daml Smart Contracts (.dar)
+        run: |
+          daml build
+
+      - name: Run Daml Contract Test Suite (22 Tests)
+        run: |
+          daml test
+
+      - name: Upload Compiled DAR Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ref-canton-dar
+          path: .daml/dist/ref-canton-0.0.1.dar
+          retention-days: 1
+
+  # Job 2: Backend API Build & Security Regression Suite
+  backend-security:
+    name: Backend Security & Access Control
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: 'backend/package-lock.json'
+
+      - name: Install Backend Dependencies
+        run: |
+          npm --prefix backend install
+
+      - name: Compile Backend TypeScript
+        run: |
+          npm --prefix backend run build
+
+      - name: Run Backend Security & Access Control Regression Tests (9 Tests)
+        run: |
+          npm --prefix backend test
+
+  # Job 3: End-to-End Multi-Participant Canton Cluster Integration & Privacy Tree Verification
+  canton-e2e:
+    name: Live Canton Multi-Participant E2E & Privacy Audit
+    needs: [daml-contracts, backend-security]
     runs-on: ubuntu-latest
 
     steps:
@@ -33,41 +110,22 @@ jobs:
           curl -sSL https://get.daml.com/ | sh -s 3.4.11
           echo "$HOME/.daml/bin" >> $GITHUB_PATH
 
-      - name: Verify Daml SDK Installation
-        run: |
-          daml version
+      - name: Download Compiled DAR Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ref-canton-dar
+          path: .daml/dist
 
-      - name: Compile Daml Smart Contracts (.dar)
+      - name: Stage DAR for Canton Cluster
         run: |
-          npm run daml:build
-
-      - name: Run Daml Contract Test Suite (17 Integration & Regression Tests)
-        run: |
-          npm test
-
-      - name: Install Backend Dependencies
-        run: |
-          npm run backend:install
-
-      - name: Compile Backend TypeScript
-        run: |
-          npm run backend:build
-
-      - name: Run Backend Security & Access Control Regression Tests
-        env:
-          AUTH_SECRET: refcanton-verified-hmac-auth-secret-key-2026
-          BORROWER_SECRET: borrower-canton-sec-2026
-          LENDER_A_SECRET: lendera-canton-sec-2026
-          LENDER_B_SECRET: lenderb-canton-sec-2026
-          OPERATOR_SECRET: operator-canton-sec-2026
-        run: |
-          npm run backend:test
+          mkdir -p canton/dars
+          cp .daml/dist/ref-canton-0.0.1.dar canton/dars/ref-canton-0.0.1.dar
 
       - name: Start Canton & Backend Stack with Docker Compose
         run: |
           ./scripts/run_docker.sh
 
-      - name: Execute End-to-End Refinancing API Test
+      - name: Execute End-to-End Refinancing API & Privacy Tree Test
         run: |
           ./scripts/test_live_api_closing.sh
 
