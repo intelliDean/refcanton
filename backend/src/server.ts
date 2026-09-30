@@ -6,8 +6,12 @@ import cors from 'cors';
 import path from 'path';
 import dotenv from 'dotenv';
 import { apiRouter } from './routes';
+import { validateRequiredDeploymentSecrets } from './middleware/auth';
 
 dotenv.config();
+
+// Refuse startup if deployment secrets are missing, unconfigured, or using public defaults
+validateRequiredDeploymentSecrets();
 
 const app = express();
 const PORT = process.env.PORT || 4000;

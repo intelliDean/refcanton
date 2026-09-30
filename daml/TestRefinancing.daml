@@ -210,6 +210,7 @@ testPaymentFreeReleaseFails = script do
       newLocker           = lenderB
       collateralCid       = state.collateralCid
       paymentEvidenceCids = []
+      fundedCashCids      = []
 
   -- Attempt 2: Payment evidence payable to borrower instead of lenderA
   fakeEvidenceCid <- submit borrower do
@@ -228,6 +229,31 @@ testPaymentFreeReleaseFails = script do
       newLocker           = lenderB
       collateralCid       = state.collateralCid
       paymentEvidenceCids = [fakeEvidenceCid]
+      fundedCashCids      = []
+
+  -- Attempt 3: Borrower attempts to create zero-payment proof
+  submitMustFail (actAs [borrower, lenderA]) do
+    createCmd PaymentEvidence with
+      loanACid   = state.loanACid
+      lenderA    = lenderA
+      payer      = borrower
+      borrower   = borrower
+      operator   = operator
+      instrument = "USD-TEST"
+      amount     = 0.0
+      settledAt  = t0
+
+  -- Attempt 4: Borrower attempts to unilaterally forge proof without creditor lenderA authorization
+  submitMustFail borrower do
+    createCmd PaymentEvidence with
+      loanACid   = state.loanACid
+      lenderA    = lenderA
+      payer      = borrower
+      borrower   = borrower
+      operator   = operator
+      instrument = "USD-TEST"
+      amount     = 101000.0
+      settledAt  = t0
 
 
 -- 2.2: Correct asset name with wrong issuer MUST FAIL
@@ -705,7 +731,7 @@ testDuplicatePaymentCashFails = script do
   let TestParties{operator, borrower, lenderA, lenderB} = state.parties
   approvals <- setupApprovals state.parties state tExpiry
 
-  ev <- submit borrower do
+  ev <- submit (actAs [borrower, lenderA]) do
     createCmd PaymentEvidence with
       loanACid   = state.loanACid
       lenderA    = lenderA
@@ -723,6 +749,7 @@ testDuplicatePaymentCashFails = script do
       newLocker           = lenderB
       collateralCid       = state.collateralCid
       paymentEvidenceCids = [ev, ev]
+      fundedCashCids      = []
 
 
 testReusedPaymentCashFails : Script ()
@@ -796,7 +823,7 @@ testReusedPaymentCashFails = script do
       expiresAt         = tExpiry
 
   -- Attempt 1: Borrower attempts to reuse evidence bound to the previous loan (state.loanACid)
-  staleEvidenceCid <- submit borrower do
+  staleEvidenceCid <- submit (actAs [borrower, lenderA]) do
     createCmd PaymentEvidence with
       loanACid   = state.loanACid  -- Bound to old archived Loan A!
       lenderA
@@ -812,6 +839,7 @@ testReusedPaymentCashFails = script do
       newLocker           = lenderB
       collateralCid       = lockedCollat2
       paymentEvidenceCids = [staleEvidenceCid]
+      fundedCashCids      = []
 
   -- Attempt 2: Borrower attempts to claim payment using empty evidence (hoping previous replacement holding is implicitly accepted)
   submitMustFail borrower do
@@ -819,6 +847,7 @@ testReusedPaymentCashFails = script do
       newLocker           = lenderB
       collateralCid       = lockedCollat2
       paymentEvidenceCids = []
+      fundedCashCids      = []
 
 
 testDisbursementRequiresCollateralSecuring : Script ()
@@ -831,7 +860,7 @@ testDisbursementRequiresCollateralSecuring = script do
   let TestParties{operator, borrower, lenderA, lenderB} = state.parties
   approvals <- setupApprovals state.parties state tExpiry
 
-  borrowerEvidenceCid <- submit borrower do
+  borrowerEvidenceCid <- submit (actAs [borrower, lenderA]) do
     createCmd PaymentEvidence with
       loanACid   = state.loanACid
       lenderA    = lenderA
@@ -896,4 +925,45 @@ testBoundCollateralExclusivelyLocked = script do
   assert (boundCollat.amount == 150.0)
   assert (boundCollat.locker == lenderB)
   assert (boundCollat.loanContext == "LoanB-collateral")
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 6. SECURITY: Reject Borrower-Created Proof with Zero Payment (Requirement 1)
+-- ─────────────────────────────────────────────────────────────────────────────
+
+testBorrowerCreatedZeroPaymentFails : Script ()
+testBorrowerCreatedZeroPaymentFails = script do
+  let t0 = time (date 2026 Jul 25) 10 0 0
+  let tExpiry = time (date 2026 Jul 26) 18 0 0
+  setTime t0
+
+  state <- initializeLedger
+  let TestParties{operator, borrower, lenderA, lenderB} = state.parties
+  approvals <- setupApprovals state.parties state tExpiry
+
+  -- Attempt 1: Borrower attempts to create proof with zero payment (amount = 0.0)
+  -- Rejected by template precondition 'ensure amount > 0.0'
+  submitMustFail (actAs [borrower, lenderA]) do
+    createCmd PaymentEvidence with
+      loanACid   = state.loanACid
+      lenderA    = lenderA
+      payer      = borrower
+      borrower   = borrower
+      operator   = operator
+      instrument = "USD-TEST"
+      amount     = 0.0
+      settledAt  = t0
+
+  -- Attempt 2: Borrower attempts to forge proof unilaterally without trusted creditor authorization
+  -- Rejected because lenderA is a required co-signatory
+  submitMustFail borrower do
+    createCmd PaymentEvidence with
+      loanACid   = state.loanACid
+      lenderA    = lenderA
+      payer      = borrower
+      borrower   = borrower
+      operator   = operator
+      instrument = "USD-TEST"
+      amount     = 101000.0
+      settledAt  = t0
 

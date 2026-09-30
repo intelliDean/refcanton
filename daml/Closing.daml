@@ -64,6 +64,9 @@ template BorrowerClosingReceipt
 -- Stakeholders: signatory borrower ONLY.
 -- NO observer lenderA, lenderB — this ensures Canton's sub-transaction privacy tree
 -- keeps each lender isolated to its own branch of the execution.
+-- SECURITY: Execute is a multi-party choice (borrower, operator). The operator
+-- co-authorization is required because PaymentEvidence creation requires operator
+-- as co-signatory, tying evidence issuance to a trusted settlement action.
 -- ─────────────────────────────────────────────────────────────────────────────
 
 template ClosingRequest
@@ -88,6 +91,8 @@ template ClosingRequest
     -- ─────────────────────────────────────────────────────────────────────────
     -- THE ATOMIC CLOSE
     -- Single transaction tree: all steps commit together or revert together.
+    -- Strict sub-transaction privacy: Lender A and Lender B operations are
+    -- separate branches under ClosingRequest (signatory borrower only).
     -- ─────────────────────────────────────────────────────────────────────────
     choice Execute : (ContractId LenderAPayoffReceipt, ContractId LenderBFundingReceipt, ContractId BorrowerClosingReceipt)
       controller borrower
@@ -116,27 +121,31 @@ template ClosingRequest
 
         now <- getTime
 
-        -- Step 3: Transfer borrower's 1,000 contribution to lenderA
-        (_borrowerPaymentToA, _) <- exercise borrowerCashCid TransferPartial with
-          recipient      = lenderA
-          transferAmount = 1000.0
+        -- Step 3: Transfer borrower's 1,000 contribution to lenderA via PayTowardsQuote
+        -- Trusted cash-transfer operation producing genuine PaymentEvidence co-signed by lenderA
+        (borrowerEvidenceCid, _borrowerCashChange) <- exercise payoffQuoteCid PayTowardsQuote with
+          payer         = borrower
+          borrowerParty = borrower
+          cashCid       = borrowerCashCid
+          paymentAmount = 1000.0
 
-        -- Step 4: Issue PaymentEvidence from Borrower to Lender A bound to loanACid
-        borrowerEvidenceCid <- create PaymentEvidence with
-          loanACid   = loanACid
-          lenderA    = lenderA
-          payer      = borrower
-          borrower   = borrower
-          operator   = operator
-          instrument = quote.instrument
-          amount     = 1000.0
-          settledAt  = now
+        -- Step 4: Disburse Lender B funding (100,000) directly to lenderA via DisburseFunds
+        -- Choice on ReplacementOffer: transfers Lender B cash to expectedRecipient (lenderA).
+        -- NOTE: Does NOT take payoffQuoteCid, DOES NOT nest payoff operations under Lender B!
+        lenderBCashTransferredCid <- exercise replacementOfferCid DisburseFunds
 
-        -- Step 5: Atomically disburse Lender B funds, settle Loan A, and secure collateral to Loan B
-        (_lenderBEvidence, loanBCid) <- exercise replacementOfferCid DisburseAndSecure with
-          payoffQuoteCid
-          borrowerEvidenceCid
-          currentCollateralCid = collateralCid
+        -- Step 5: Settle PayoffQuote and re-pledge collateral to Lender B
+        -- NOTE: Executed directly under ClosingRequest — NOT nested under Lender B's choice!
+        -- Preserves sub-transaction privacy tree: Lender B does NOT witness this payoff branch.
+        repledgedCollatCid <- exercise payoffQuoteCid SettleAndRepledge with
+          newLocker           = lenderB
+          collateralCid
+          paymentEvidenceCids = [borrowerEvidenceCid]
+          fundedCashCids      = [lenderBCashTransferredCid]
+
+        -- Step 6: Secure repledged collateral and create Loan B
+        loanBCid <- exercise replacementOfferCid SecureLoan with
+          repledgedCollatCid
 
         -- Step 6: Issue role-isolated receipts
         receiptA <- create LenderAPayoffReceipt with

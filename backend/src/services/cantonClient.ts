@@ -166,20 +166,40 @@ export class CantonClient {
     }
   }
 
+  private cachedPkgId: string | null = null;
+
   async getPackageId(): Promise<string> {
+    if (this.cachedPkgId) return this.cachedPkgId;
+    if (process.env.CANTON_PACKAGE_ID) {
+      this.cachedPkgId = process.env.CANTON_PACKAGE_ID.trim();
+      return this.cachedPkgId;
+    }
     try {
       const data = await this.httpGet(`http://${this.host}:${this.httpPort}/v2/packages`);
       const parsed = JSON.parse(data);
       if (Array.isArray(parsed?.packageIds)) {
-        if (parsed.packageIds.includes('95f31a4134ddf9570c95a07245dc9334579a646c1e48c07fcc1c38685cb07912')) {
-          return '95f31a4134ddf9570c95a07245dc9334579a646c1e48c07fcc1c38685cb07912';
+        if (parsed.packageIds.includes('22c3e1c0b47bc720a1730307643be6c53d8b9fd6583a9a688da218e3698db70d')) {
+          this.cachedPkgId = '22c3e1c0b47bc720a1730307643be6c53d8b9fd6583a9a688da218e3698db70d';
+          return this.cachedPkgId;
         }
-        return parsed.packageIds[parsed.packageIds.length - 1] || '95f31a4134ddf9570c95a07245dc9334579a646c1e48c07fcc1c38685cb07912';
+        for (let i = parsed.packageIds.length - 1; i >= 0; i--) {
+          const pid = parsed.packageIds[i];
+          try {
+            const pkgBuf = await this.httpGet(`http://${this.host}:${this.httpPort}/v2/packages/${pid}`);
+            if (pkgBuf && (pkgBuf.includes('ref-canton') || pkgBuf.includes('ClosingRequest') || pkgBuf.includes('CashHolding'))) {
+              this.cachedPkgId = pid;
+              return pid;
+            }
+          } catch {
+            // continue
+          }
+        }
       }
     } catch {
       // Fallback
     }
-    return '95f31a4134ddf9570c95a07245dc9334579a646c1e48c07fcc1c38685cb07912';
+    this.cachedPkgId = '22c3e1c0b47bc720a1730307643be6c53d8b9fd6583a9a688da218e3698db70d';
+    return this.cachedPkgId;
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -555,9 +575,10 @@ export class CantonClient {
     const pkgId = await this.getPackageId();
     const borrowerPartyId = await this.resolvePartyId(borrower, this.httpPort);
 
-    // 2. Ensure ClosingRequest exists on Canton
-    if (!this.cantonState.closingRequestCid) {
-      await this.createClosingRequestOnCanton(borrower);
+    // 2. Validate and execute the EXACT requested contract ID (no silent recreation or cached fallback)
+    const targetClosingRequestCid = requestId.trim();
+    if (this.cantonState.closingRequestCid && this.cantonState.closingRequestCid !== targetClosingRequestCid) {
+      console.warn(`[CantonClient] Executing supplied requestId '${targetClosingRequestCid}' overriding cached closingRequestCid '${this.cantonState.closingRequestCid}'`);
     }
 
     // 3. Submit real ExerciseCommand on ClosingRequest.Execute on Canton Participant 1
@@ -565,7 +586,7 @@ export class CantonClient {
       {
         ExerciseCommand: {
           templateId: `${pkgId}:Closing:ClosingRequest`,
-          contractId: this.cantonState.closingRequestCid,
+          contractId: targetClosingRequestCid,
           choice: 'Execute',
           choiceArgument: {},
         },
@@ -583,7 +604,7 @@ export class CantonClient {
       throw new Error(`Canton transaction confirmation failed for updateId '${updateId}': Transaction not found on ledger.`);
     }
 
-    // 5. Read resulting contracts and verify actual ledger state changes from Canton events
+    // 5. Read resulting contracts and strictly verify actual ledger state changes from Canton events
     let receiptACid: string | undefined;
     let receiptBCid: string | undefined;
     let receiptBorrowerCid: string | undefined;
@@ -613,32 +634,53 @@ export class CantonClient {
       }
     }
 
+    // STRICT LEDGER ENFORCEMENT: Reject settlement if any required ledger event is missing
+    if (!loanAArchived) {
+      throw new Error(`Atomic settlement failed: LoanA was NOT archived on Canton in transaction '${updateId}'. Unverified debt payoff; false success rejected.`);
+    }
+    if (!receiptACid) {
+      throw new Error(`Atomic settlement failed: LenderAPayoffReceipt was NOT created on Canton in transaction '${updateId}'. Missing ledger evidence.`);
+    }
+    if (!receiptBCid) {
+      throw new Error(`Atomic settlement failed: LenderBFundingReceipt was NOT created on Canton in transaction '${updateId}'. Missing ledger evidence.`);
+    }
+    if (!receiptBorrowerCid) {
+      throw new Error(`Atomic settlement failed: BorrowerClosingReceipt was NOT created on Canton in transaction '${updateId}'. Missing ledger evidence.`);
+    }
+    if (!loanBCid) {
+      throw new Error(`Atomic settlement failed: LoanB was NOT created on Canton in transaction '${updateId}'. Missing ledger evidence.`);
+    }
+    if (!boundCollatCid) {
+      throw new Error(`Atomic settlement failed: BoundCollateralHolding was NOT created on Canton in transaction '${updateId}'. Missing ledger evidence.`);
+    }
+
     const timestamp = new Date().toISOString();
 
+    // Genuine receipts constructed exclusively from verified Canton ledger contract IDs (no fabricated fallbacks)
     const receiptA: LenderAPayoffReceipt = {
-      contractId: receiptACid || `canton-rcpt-a-${updateId.slice(0, 16)}`,
+      contractId: receiptACid,
       borrower: DEFAULT_PARTIES.BORROWER,
       lenderA: DEFAULT_PARTIES.LENDER_A,
-      loanACid: this.cantonState.loanACid || 'loanA-archived',
+      loanACid: this.cantonState.loanACid || '',
       payoffAmount: BASELINE_CONFIG.LOAN_A_PRINCIPAL,
       collateralUnitsReleased: BASELINE_CONFIG.COLLATERAL_UNITS,
       closedAt: timestamp,
     };
 
     const receiptB: LenderBFundingReceipt = {
-      contractId: receiptBCid || `canton-rcpt-b-${updateId.slice(0, 16)}`,
+      contractId: receiptBCid,
       borrower: DEFAULT_PARTIES.BORROWER,
       lenderB: DEFAULT_PARTIES.LENDER_B,
-      loanBCid: loanBCid || `loanB-${updateId.slice(0, 16)}`,
+      loanBCid: loanBCid,
       principalFunded: BASELINE_CONFIG.LOAN_B_PRINCIPAL,
       collateralUnitsSecured: BASELINE_CONFIG.COLLATERAL_UNITS,
       closedAt: timestamp,
     };
 
     const receiptBorrower: BorrowerClosingReceipt = {
-      contractId: receiptBorrowerCid || `canton-rcpt-borrower-${updateId.slice(0, 16)}`,
+      contractId: receiptBorrowerCid,
       borrower: DEFAULT_PARTIES.BORROWER,
-      loanACid: this.cantonState.loanACid || 'loanA-archived',
+      loanACid: this.cantonState.loanACid || '',
       loanBCid: receiptB.loanBCid,
       payoffAmount: BASELINE_CONFIG.LOAN_A_PRINCIPAL,
       newPrincipal: BASELINE_CONFIG.LOAN_B_PRINCIPAL,
@@ -654,7 +696,7 @@ export class CantonClient {
       operator: DEFAULT_PARTIES.OPERATOR,
       principal: BASELINE_CONFIG.LOAN_B_PRINCIPAL,
       maturityDate: BASELINE_CONFIG.LOAN_B_MATURITY,
-      collateralCid: boundCollatCid || `collat-bound-${receiptB.loanBCid}`,
+      collateralCid: boundCollatCid,
       capRate: BASELINE_CONFIG.LOAN_B_CAP_RATE,
       amortizationPeriods: BASELINE_CONFIG.LOAN_B_AMORTIZATION_PERIODS,
     };
@@ -667,7 +709,7 @@ export class CantonClient {
     return {
       success: true,
       updateId,
-      transactionId: confirmedTx.transaction.commandId || `canton-tx-${updateId.slice(0, 16)}`,
+      transactionId: confirmedTx.transaction.commandId || updateId,
       synchronizerId: health.synchronizerId || 'refsynchronizer',
       receiptA,
       receiptB,
@@ -691,6 +733,36 @@ export class CantonClient {
     const body = JSON.stringify({
       updateId,
       requestingParties: [partyId],
+    });
+
+    const res = await this.httpPost(`http://${this.host}:${port}/v2/updates/transaction-by-id`, body);
+    return JSON.parse(res);
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // FULL TRANSACTION TREE & LEDGER EFFECTS INSPECTION (SUB-TRANSACTION PRIVACY PROOF)
+  // Queries complete execution tree with choices, exercises, and child events.
+  // ───────────────────────────────────────────────────────────────────────────
+  async getTransactionTreeById(updateId: string, party?: string): Promise<any> {
+    let port = this.httpPort;
+    if (party === DEFAULT_PARTIES.LENDER_A || party?.startsWith('LenderA::')) {
+      port = this.p2HttpPort;
+    } else if (party === DEFAULT_PARTIES.LENDER_B || party?.startsWith('LenderB::')) {
+      port = this.p3HttpPort;
+    }
+
+    const partyId = await this.resolvePartyId(party || DEFAULT_PARTIES.BORROWER, port);
+    const body = JSON.stringify({
+      updateId,
+      transactionFormat: {
+        transactionShape: 'TRANSACTION_SHAPE_LEDGER_EFFECTS',
+        eventFormat: {
+          filtersByParty: {
+            [partyId]: {},
+          },
+          verbose: true,
+        },
+      },
     });
 
     const res = await this.httpPost(`http://${this.host}:${port}/v2/updates/transaction-by-id`, body);

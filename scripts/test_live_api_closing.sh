@@ -242,41 +242,63 @@ CANTON_P3_HTTP="${CANTON_P3_HTTP:-http://localhost:5034}"
 P2_LENDERA_PARTY=$(curl -s "$CANTON_P2_HTTP/v2/parties" | grep -o 'LenderA::[^"]*' | head -n1)
 P3_LENDERB_PARTY=$(curl -s "$CANTON_P3_HTTP/v2/parties" | grep -o 'LenderB::[^"]*' | head -n1)
 
-# 1. Query Participant 2 (Lender A) directly for the committed closing update
+# 1. Query Participant 2 (Lender A) directly for the committed closing update (Flat ACS & Full Transaction Tree)
 P2_TX=$(curl -s -X POST "$CANTON_P2_HTTP/v2/updates/transaction-by-id" \
   -H "Content-Type: application/json" \
   -d "{\"updateId\":\"$UPDATE_ID\",\"requestingParties\":[\"$P2_LENDERA_PARTY\"]}")
 
-# Verify Lender A's participant receives settlement of Loan A
+# Verify Lender A's participant receives settlement of Loan A in flat events
 if ! echo "$P2_TX" | grep -q "LenderAPayoffReceipt"; then
   echo "❌ PRIVACY/SETTLEMENT FAILURE: Participant 2 transaction missing LenderAPayoffReceipt!"
   exit 1
 fi
-# Verify Lender A's participant has ZERO visibility into Loan B or replacement terms
 if echo "$P2_TX" | grep -q "LoanB"; then
   echo "❌ PRIVACY VIOLATION ON CANTON P2: Participant 2 received LoanB!"
   exit 1
 fi
-if echo "$P2_TX" | grep -q "ReplacementOffer"; then
-  echo "❌ PRIVACY VIOLATION ON CANTON P2: Participant 2 received ReplacementOffer!"
-  exit 1
-fi
-if echo "$P2_TX" | grep -q "capRate"; then
-  echo "❌ PRIVACY VIOLATION ON CANTON P2: Participant 2 received Lender B's capRate!"
-  exit 1
-fi
-if echo "$P2_TX" | grep -q "amortizationPeriods"; then
-  echo "❌ PRIVACY VIOLATION ON CANTON P2: Participant 2 received Lender B's amortizationPeriods!"
-  exit 1
-fi
-echo "  ✓ Canton Participant 2 (Lender A): Confirmed settlement receipt; ZERO visibility into Loan B terms"
 
-# 2. Query Participant 3 (Lender B) directly for the committed closing update
+# Full Transaction Tree Inspection for Participant 2 (Lender A)
+echo "  Querying Full Transaction Tree (TRANSACTION_SHAPE_LEDGER_EFFECTS) for Lender A on P2..."
+P2_TREE=$(curl -s -X POST "$CANTON_P2_HTTP/v2/updates/transaction-by-id" \
+  -H "Content-Type: application/json" \
+  -d "{\"updateId\":\"$UPDATE_ID\",\"transactionFormat\":{\"transactionShape\":\"TRANSACTION_SHAPE_LEDGER_EFFECTS\",\"eventFormat\":{\"filtersByParty\":{\"$P2_LENDERA_PARTY\":{}},\"verbose\":true}}}")
+
+if ! echo "$P2_TREE" | grep -q "LenderAPayoffReceipt"; then
+  echo "❌ PRIVACY/SETTLEMENT FAILURE: Participant 2 full tree missing LenderAPayoffReceipt!"
+  exit 1
+fi
+if echo "$P2_TREE" | grep -q "LoanB"; then
+  echo "❌ PRIVACY TREE VIOLATION ON CANTON P2: Lender A transaction tree witnesses LoanB!"
+  exit 1
+fi
+if echo "$P2_TREE" | grep -q "ReplacementOffer"; then
+  echo "❌ PRIVACY TREE VIOLATION ON CANTON P2: Lender A transaction tree witnesses ReplacementOffer!"
+  exit 1
+fi
+if echo "$P2_TREE" | grep -q "SecureLoan"; then
+  echo "❌ PRIVACY TREE VIOLATION ON CANTON P2: Lender A transaction tree witnesses SecureLoan choice!"
+  exit 1
+fi
+if echo "$P2_TREE" | grep -q "capRate"; then
+  echo "❌ PRIVACY TREE VIOLATION ON CANTON P2: Lender A transaction tree witnesses Lender B's capRate!"
+  exit 1
+fi
+if echo "$P2_TREE" | grep -q "amortizationPeriods"; then
+  echo "❌ PRIVACY TREE VIOLATION ON CANTON P2: Lender A transaction tree witnesses Lender B's amortizationPeriods!"
+  exit 1
+fi
+if echo "$P2_TREE" | grep -q "LenderBFundingReceipt"; then
+  echo "❌ PRIVACY TREE VIOLATION ON CANTON P2: Lender A transaction tree witnesses LenderBFundingReceipt!"
+  exit 1
+fi
+echo "  ✓ Canton Participant 2 (Lender A): Full transaction tree confirmed; ZERO visibility into Loan B, ReplacementOffer, or terms"
+
+# 2. Query Participant 3 (Lender B) directly for the committed closing update (Flat ACS & Full Transaction Tree)
 P3_TX=$(curl -s -X POST "$CANTON_P3_HTTP/v2/updates/transaction-by-id" \
   -H "Content-Type: application/json" \
   -d "{\"updateId\":\"$UPDATE_ID\",\"requestingParties\":[\"$P3_LENDERB_PARTY\"]}")
 
-# Verify Lender B's participant receives funding of Loan B
+# Verify Lender B's participant receives funding of Loan B in flat events
 if ! echo "$P3_TX" | grep -q "LenderBFundingReceipt"; then
   echo "❌ PRIVACY/SETTLEMENT FAILURE: Participant 3 transaction missing LenderBFundingReceipt!"
   exit 1
@@ -285,20 +307,63 @@ if ! echo "$P3_TX" | grep -q "LoanB"; then
   echo "❌ PRIVACY/SETTLEMENT FAILURE: Participant 3 transaction missing LoanB!"
   exit 1
 fi
-# Verify Lender B's participant has ZERO visibility into Loan A or payoff terms
-if echo "$P3_TX" | grep -q "LoanA"; then
-  echo "❌ PRIVACY VIOLATION ON CANTON P3: Participant 3 received LoanA!"
+
+# Full Transaction Tree Inspection for Participant 3 (Lender B)
+echo "  Querying Full Transaction Tree (TRANSACTION_SHAPE_LEDGER_EFFECTS) for Lender B on P3..."
+P3_TREE=$(curl -s -X POST "$CANTON_P3_HTTP/v2/updates/transaction-by-id" \
+  -H "Content-Type: application/json" \
+  -d "{\"updateId\":\"$UPDATE_ID\",\"transactionFormat\":{\"transactionShape\":\"TRANSACTION_SHAPE_LEDGER_EFFECTS\",\"eventFormat\":{\"filtersByParty\":{\"$P3_LENDERB_PARTY\":{}},\"verbose\":true}}}")
+
+if ! echo "$P3_TREE" | grep -q "LenderBFundingReceipt"; then
+  echo "❌ PRIVACY/SETTLEMENT FAILURE: Participant 3 full tree missing LenderBFundingReceipt!"
   exit 1
 fi
-if echo "$P3_TX" | grep -q "PayoffQuote"; then
-  echo "❌ PRIVACY VIOLATION ON CANTON P3: Participant 3 received PayoffQuote!"
+if ! echo "$P3_TREE" | grep -q "LoanB"; then
+  echo "❌ PRIVACY/SETTLEMENT FAILURE: Participant 3 full tree missing LoanB!"
   exit 1
 fi
-if echo "$P3_TX" | grep -q "LenderAPayoffReceipt"; then
-  echo "❌ PRIVACY VIOLATION ON CANTON P3: Participant 3 received LenderAPayoffReceipt!"
+# CRITICAL PRIVACY PROOF: Verify SettleAndRepledge is NOT nested under Lender B's choice or visible in Lender B's tree
+if echo "$P3_TREE" | grep -q "SettleAndRepledge"; then
+  echo "❌ PRIVACY TREE VIOLATION ON CANTON P3: Payoff operation 'SettleAndRepledge' is nested or witnessed in Lender B's transaction tree!"
   exit 1
 fi
-echo "  ✓ Canton Participant 3 (Lender B): Confirmed funding receipt & Loan B; ZERO visibility into Loan A terms"
+if echo "$P3_TREE" | grep -q "LoanA"; then
+  echo "❌ PRIVACY TREE VIOLATION ON CANTON P3: Participant 3 transaction tree witnesses LoanA!"
+  exit 1
+fi
+if echo "$P3_TREE" | grep -q "PayoffQuote"; then
+  echo "❌ PRIVACY TREE VIOLATION ON CANTON P3: Participant 3 transaction tree witnesses PayoffQuote!"
+  exit 1
+fi
+if echo "$P3_TREE" | grep -q "LenderAPayoffReceipt"; then
+  echo "❌ PRIVACY TREE VIOLATION ON CANTON P3: Participant 3 transaction tree witnesses LenderAPayoffReceipt!"
+  exit 1
+fi
+echo "  ✓ Canton Participant 3 (Lender B): Full transaction tree confirmed; SettleAndRepledge NOT nested; ZERO visibility into Loan A or Payoff"
+
+# Full Transaction Tree Verification via Gateway API Endpoint (/api/transactions/:id/tree)
+echo "  Querying Gateway API /api/transactions/$UPDATE_ID/tree authenticated per party..."
+API_TREE_LENDERB=$(curl -s -f -H "Authorization: Bearer $TOKEN_LENDERB" "$API_BASE/api/transactions/$UPDATE_ID/tree")
+if echo "$API_TREE_LENDERB" | grep -q "SettleAndRepledge"; then
+  echo "❌ PRIVACY VIOLATION: Gateway transaction tree for Lender B contains SettleAndRepledge!"
+  exit 1
+fi
+if echo "$API_TREE_LENDERB" | grep -q "LoanA"; then
+  echo "❌ PRIVACY VIOLATION: Gateway transaction tree for Lender B contains LoanA!"
+  exit 1
+fi
+echo "  ✓ Gateway Tree API (Lender B): Verified SettleAndRepledge and LoanA absent from tree"
+
+API_TREE_LENDERA=$(curl -s -f -H "Authorization: Bearer $TOKEN_LENDERA" "$API_BASE/api/transactions/$UPDATE_ID/tree")
+if echo "$API_TREE_LENDERA" | grep -q "LoanB"; then
+  echo "❌ PRIVACY VIOLATION: Gateway transaction tree for Lender A contains LoanB!"
+  exit 1
+fi
+if echo "$API_TREE_LENDERA" | grep -q "ReplacementOffer"; then
+  echo "❌ PRIVACY VIOLATION: Gateway transaction tree for Lender A contains ReplacementOffer!"
+  exit 1
+fi
+echo "  ✓ Gateway Tree API (Lender A): Verified LoanB and ReplacementOffer absent from tree"
 
 # 3. Authenticated Gateway Transaction API Checks
 LENDER_A_TXS=$(curl -s -f -H "Authorization: Bearer $TOKEN_LENDERA" "$API_BASE/api/transactions")

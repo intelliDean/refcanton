@@ -19,19 +19,61 @@ const VALID_PARTIES = new Set([
   DEFAULT_PARTIES.OPERATOR,
 ]);
 
+const INSECURE_FALLBACK_SECRETS = new Set([
+  'refcanton-verified-secret-key-2026',
+]);
+
 export function getAuthSecret(): string {
-  return process.env.AUTH_SECRET || 'refcanton-verified-secret-key-2026';
+  const secret = process.env.AUTH_SECRET;
+  if (!secret || secret.trim() === '' || INSECURE_FALLBACK_SECRETS.has(secret.trim())) {
+    throw new Error(
+      'FATAL AUTH CONFIGURATION ERROR: AUTH_SECRET environment variable is missing, empty, or using an insecure public fallback default. Refusing execution. Private deployment secret is required.'
+    );
+  }
+  return secret.trim();
+}
+
+/**
+ * Validates that all required private deployment secrets are present and non-empty,
+ * and refuse startup when any are missing or match public/fallback defaults.
+ */
+export function validateRequiredDeploymentSecrets(): void {
+  const missingOrInsecure: string[] = [];
+
+  const authSecret = process.env.AUTH_SECRET;
+  if (!authSecret || authSecret.trim() === '' || INSECURE_FALLBACK_SECRETS.has(authSecret.trim())) {
+    missingOrInsecure.push('AUTH_SECRET (missing or public default)');
+  }
+
+  const partyVars = [
+    { key: 'BORROWER_SECRET', val: process.env.BORROWER_SECRET },
+    { key: 'LENDER_A_SECRET', val: process.env.LENDER_A_SECRET },
+    { key: 'LENDER_B_SECRET', val: process.env.LENDER_B_SECRET },
+    { key: 'OPERATOR_SECRET', val: process.env.OPERATOR_SECRET },
+  ];
+
+  for (const { key, val } of partyVars) {
+    if (!val || val.trim() === '') {
+      missingOrInsecure.push(key);
+    }
+  }
+
+  if (missingOrInsecure.length > 0) {
+    const errorMsg = `FATAL STARTUP REFUSAL: Refusing startup because required private deployment secrets are missing or insecure: [${missingOrInsecure.join(', ')}]. Public or fallback defaults are strictly rejected.`;
+    console.error(errorMsg);
+    throw new Error(errorMsg);
+  }
 }
 
 export const PARTY_CREDENTIALS: Record<string, string> = new Proxy(
   {},
   {
     get(_target, prop: string) {
-      if (prop === DEFAULT_PARTIES.BORROWER) return process.env.BORROWER_SECRET || '';
-      if (prop === DEFAULT_PARTIES.LENDER_A) return process.env.LENDER_A_SECRET || '';
-      if (prop === DEFAULT_PARTIES.LENDER_B) return process.env.LENDER_B_SECRET || '';
-      if (prop === DEFAULT_PARTIES.OPERATOR) return process.env.OPERATOR_SECRET || '';
-      return '';
+      if (prop === DEFAULT_PARTIES.BORROWER) return (process.env.BORROWER_SECRET || '').trim();
+      if (prop === DEFAULT_PARTIES.LENDER_A) return (process.env.LENDER_A_SECRET || '').trim();
+      if (prop === DEFAULT_PARTIES.LENDER_B) return (process.env.LENDER_B_SECRET || '').trim();
+      if (prop === DEFAULT_PARTIES.OPERATOR) return (process.env.OPERATOR_SECRET || '').trim();
+      return undefined;
     },
     has(_target, prop: string) {
       return [

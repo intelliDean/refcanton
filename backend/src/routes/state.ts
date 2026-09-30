@@ -71,6 +71,18 @@ stateRouter.get('/transactions/:updateId', authMiddleware, async (req: Authentic
   }
 });
 
+// Retrieve full transaction tree with ledger effects by Canton Update ID
+stateRouter.get('/transactions/:updateId/tree', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const updateId = String(req.params.updateId);
+    const party = req.authenticatedParty || DEFAULT_PARTIES.BORROWER;
+    const tree = await cantonClient.getTransactionTreeById(updateId, party);
+    res.json(tree);
+  } catch (error: any) {
+    res.status(404).json({ error: 'TRANSACTION_TREE_NOT_FOUND', message: error.message });
+  }
+});
+
 stateRouter.post('/reset', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   if (req.authenticatedParty !== DEFAULT_PARTIES.OPERATOR) {
     res.status(403).json({

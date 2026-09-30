@@ -293,8 +293,150 @@ async function runRegressionTests() {
     const res6c = await request(server, 'GET', '/api/status');
     assert(res6c.status === 200, 'GET /api/status returns HTTP 200 without authentication');
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // TEST 7: Private Deployment Secrets Validation & Startup Refusal
+    // ─────────────────────────────────────────────────────────────────────────
+    console.log('\n[TEST 7] Verifying Private Deployment Secrets Validation & Startup Refusal...');
+
+    const { validateRequiredDeploymentSecrets } = await import('../middleware/auth');
+
+    // 7a: Valid configuration should not throw
+    let didThrow = false;
+    try {
+      validateRequiredDeploymentSecrets();
+    } catch {
+      didThrow = true;
+    }
+    assert(!didThrow, 'validateRequiredDeploymentSecrets() succeeds with valid private secrets');
+
+    // 7b: Insecure public fallback secret rejected
+    const originalAuthSecret = process.env.AUTH_SECRET;
+    try {
+      process.env.AUTH_SECRET = 'refcanton-verified-secret-key-2026';
+      let caughtInsecure = false;
+      try {
+        validateRequiredDeploymentSecrets();
+      } catch (err: any) {
+        caughtInsecure = true;
+        assert(err.message.includes('AUTH_SECRET'), 'Rejection error identifies insecure AUTH_SECRET');
+      }
+      assert(caughtInsecure, 'Startup strictly refused when AUTH_SECRET uses public fallback default');
+    } finally {
+      process.env.AUTH_SECRET = originalAuthSecret;
+    }
+
+    // 7c: Missing party secret rejected
+    const originalBorrowerSecret = process.env.BORROWER_SECRET;
+    try {
+      delete process.env.BORROWER_SECRET;
+      let caughtMissing = false;
+      try {
+        validateRequiredDeploymentSecrets();
+      } catch (err: any) {
+        caughtMissing = true;
+        assert(err.message.includes('BORROWER_SECRET'), 'Rejection error identifies missing BORROWER_SECRET');
+      }
+      assert(caughtMissing, 'Startup strictly refused when BORROWER_SECRET is missing');
+    } finally {
+      process.env.BORROWER_SECRET = originalBorrowerSecret;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // TEST 8: Settlement Verification Rejects False Success on Controlled Mock
+    // ─────────────────────────────────────────────────────────────────────────
+    console.log('\n[TEST 8] Verifying Controlled Mock Rejection (Zero Settlement Events & Missing LoanA)...');
+
+    const origCheckHealth = cantonClient.checkHealth.bind(cantonClient);
+    const origGetPackageId = cantonClient.getPackageId.bind(cantonClient);
+    const origResolvePartyId = cantonClient.resolvePartyId.bind(cantonClient);
+    const origSubmitCommands = cantonClient.submitCommands.bind(cantonClient);
+    const origGetTxById = cantonClient.getTransactionById.bind(cantonClient);
+
+    cantonClient.checkHealth = async () => ({ online: true });
+    cantonClient.getPackageId = async () => 'mock-pkg-id-12345';
+    cantonClient.resolvePartyId = async (p: string) => `${p}::mock-fingerprint`;
+    cantonClient.submitCommands = async () => ({ updateId: 'mock-tx-zero-events-001' } as any);
+
+    try {
+      // 8a: Controlled Mock returning ZERO events (events: [])
+      cantonClient.getTransactionById = async () => ({
+        transaction: {
+          updateId: 'mock-tx-zero-events-001',
+          events: [],
+        } as any,
+      });
+
+      let zeroEventsError: string | null = null;
+      try {
+        await cantonClient.executeAtomicClosingOnCanton('mock-req-zero-events');
+      } catch (err: any) {
+        zeroEventsError = err.message;
+      }
+      assert(
+        zeroEventsError !== null && zeroEventsError.includes('LoanA was NOT archived'),
+        'Controlled mock with zero settlement events is REJECTED without false success'
+      );
+
+      // 8b: Controlled Mock returning loanA archived, but missing payoff receipt
+      cantonClient.getTransactionById = async () => ({
+        transaction: {
+          updateId: 'mock-tx-partial-events-002',
+          events: [
+            {
+              ArchivedEvent: {
+                templateId: 'mock-pkg-id-12345:Loan:LoanA',
+                contractId: 'mock-loana-cid',
+              },
+            },
+          ],
+        } as any,
+      });
+
+      let missingReceiptError: string | null = null;
+      try {
+        await cantonClient.executeAtomicClosingOnCanton('mock-req-missing-receipt');
+      } catch (err: any) {
+        missingReceiptError = err.message;
+      }
+      assert(
+        missingReceiptError !== null && missingReceiptError.includes('LenderAPayoffReceipt was NOT created'),
+        'Controlled mock missing LenderAPayoffReceipt is REJECTED with missing ledger evidence error'
+      );
+
+      // 8c: Calling /api/closing/execute with mock returning zero events returns HTTP 500 (never success: true)
+      // Set up a valid closing request on local ledger so pre-checks pass
+      const testCloseReq = ledger.createClosingRequest(DEFAULT_PARTIES.BORROWER);
+      cantonClient.getTransactionById = async () => ({
+        transaction: {
+          updateId: 'mock-tx-zero-events-003',
+          events: [],
+        } as any,
+      });
+
+      const res8_api = await request(
+        server,
+        'POST',
+        '/api/closing/execute',
+        { Authorization: `Bearer ${tokenBorrower}` },
+        { requestId: testCloseReq.contractId }
+      );
+      assert(res8_api.status === 400, 'POST /api/closing/execute with zero events returns HTTP 400');
+      assert(res8_api.data.success !== true, 'Controlled mock with zero events NEVER reports success: true');
+      assert(
+        res8_api.data.error && res8_api.data.error.includes('LoanA was NOT archived'),
+        'API error message identifies that LoanA was not archived on Canton'
+      );
+    } finally {
+      // Restore cantonClient methods
+      cantonClient.checkHealth = origCheckHealth;
+      cantonClient.getPackageId = origGetPackageId;
+      cantonClient.resolvePartyId = origResolvePartyId;
+      cantonClient.submitCommands = origSubmitCommands;
+      cantonClient.getTransactionById = origGetTxById;
+    }
+
     console.log('\n===================================================================');
-    console.log(' ALL 7 BACKEND REGRESSION & SECURITY TESTS PASSED SUCCESSFULLY! ✓');
+    console.log(' ALL 9 BACKEND REGRESSION & SECURITY TESTS PASSED SUCCESSFULLY! ✓');
     console.log('===================================================================');
   } finally {
     server.close();

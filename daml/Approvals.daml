@@ -15,23 +15,27 @@ import Loan
 -- ─────────────────────────────────────────────────────────────────────────────
 -- PAYMENT EVIDENCE
 -- Single-use, loan-bound payment evidence produced during debt payoff.
--- Guarantees that payment proof cannot be reused across fresh loans or settlements,
--- while the recipient lender retains genuine spendable CashHolding.
+-- SECURITY: lenderA (creditor recipient) and payer are required co-signatories.
+-- This makes it impossible for a borrower (or any single party) to self-issue
+-- evidence without a genuine cash-transfer operation authorized by the creditor.
+-- Any direct creation attempt without lenderA's signature is rejected by Canton.
 -- ─────────────────────────────────────────────────────────────────────────────
 
 template PaymentEvidence
   with
     loanACid   : ContractId LoanA   -- strictly bound to the target LoanA contract
-    lenderA    : Party              -- recipient of payment
-    payer      : Party              -- borrower or funding lender
+    lenderA    : Party              -- recipient of payment (trusted creditor)
+    payer      : Party              -- borrower or funding lender who transferred cash
     borrower   : Party              -- authorized borrower to consume evidence
-    operator   : Party
+    operator   : Party              -- asset operator
     instrument : Text               -- "USD-TEST"
-    amount     : Decimal            -- amount paid towards payoff
+    amount     : Decimal            -- amount paid towards payoff (must be > 0)
     settledAt  : Time
   where
-    signatory payer
-    observer  lenderA, borrower
+    signatory lenderA, payer       -- BOTH creditor recipient and payer must co-sign
+    observer  borrower
+
+    ensure amount > 0.0            -- zero-value evidence is rejected at creation time
 
     choice ConsumeEvidence : ()
       controller borrower
@@ -67,20 +71,67 @@ template PayoffQuote
       controller lenderA
       do return ()
 
-    -- Borrower exercises this INSIDE ClosingRequest.Execute / DisburseAndSecure.
+    -- Trusted cash-transfer operation: verifies genuine cash, transfers it to lenderA,
+    -- and issues non-forgeable PaymentEvidence co-signed by lenderA and payer.
+    nonconsuming choice PayTowardsQuote : (ContractId PaymentEvidence, Optional (ContractId CashHolding))
+      with
+        payer         : Party
+        borrowerParty : Party
+        cashCid       : ContractId CashHolding
+        paymentAmount : Decimal
+      controller payer
+      do
+        now <- getTime
+        assertMsg "PayoffQuote has expired" (now < expiresAt)
+        assertMsg "Payment amount must be positive" (paymentAmount > 0.0)
+
+        cash <- fetch cashCid
+        assertMsg "Cash operator mismatch" (cash.operator == expectedOperator)
+        assertMsg "Cash instrument mismatch" (cash.instrument == instrument)
+        assertMsg "Cash balance insufficient" (cash.amount >= paymentAmount)
+        assertMsg "Payer must own the cash" (cash.owner == payer)
+
+        (transferredCashCid, changeCid) <- if cash.amount == paymentAmount
+          then do
+            c <- exercise cashCid Transfer with recipient = expectedRecipient
+            return (c, None)
+          else do
+            (c, ch) <- exercise cashCid TransferPartial with
+              recipient      = expectedRecipient
+              transferAmount = paymentAmount
+            return (c, Some ch)
+
+        evidenceCid <- create PaymentEvidence with
+          loanACid   = loanACid
+          lenderA    = expectedRecipient
+          payer      = payer
+          borrower   = borrowerParty
+          operator   = expectedOperator
+          instrument = instrument
+          amount     = paymentAmount
+          settledAt  = now
+
+        return (evidenceCid, changeCid)
+
+    -- Borrower exercises this INSIDE ClosingRequest.Execute.
     -- Signatory lenderA + controller borrower provide authorization to archive LoanA
     -- and re-pledge the collateral to lenderB upon verified payment.
     choice SettleAndRepledge : ContractId LockedCollateralHolding
       with
-        newLocker           : Party
-        collateralCid       : ContractId LockedCollateralHolding
+        newLocker            : Party
+        collateralCid        : ContractId LockedCollateralHolding
         paymentEvidenceCids : [ContractId PaymentEvidence]
+        fundedCashCids       : [ContractId CashHolding]
       controller borrower
       do
         now <- getTime
         assertMsg "PayoffQuote has expired" (now < expiresAt)
-        assertMsg "Payment evidence list cannot be empty" (not (null paymentEvidenceCids))
-        assertMsg "Duplicate payment evidence IDs not allowed" (dedup paymentEvidenceCids == paymentEvidenceCids)
+        assertMsg "Payment list cannot be completely empty"
+          (not (null paymentEvidenceCids && null fundedCashCids))
+        assertMsg "Duplicate payment evidence IDs not allowed"
+          (dedup paymentEvidenceCids == paymentEvidenceCids)
+        assertMsg "Duplicate funded cash IDs not allowed"
+          (dedup fundedCashCids == fundedCashCids)
         assertMsg "Locker mismatch" (newLocker == expectedLocker)
 
         evidences <- mapA fetch paymentEvidenceCids
@@ -90,7 +141,16 @@ template PayoffQuote
           assertMsg "Payment evidence operator mismatch" (ev.operator == expectedOperator)
           assertMsg "Payment evidence instrument mismatch" (ev.instrument == instrument)
 
-        let totalPaid = sum (map (\e -> e.amount) evidences)
+        fundedCashes <- mapA fetch fundedCashCids
+        forA_ fundedCashes $ \c -> do
+          assertMsg "Funded cash must be owned by lenderA" (c.owner == lenderA && c.owner == expectedRecipient)
+          assertMsg "Funded cash operator mismatch" (c.operator == expectedOperator)
+          assertMsg "Funded cash instrument mismatch" (c.instrument == instrument)
+          assertMsg "Funded cash amount must be positive" (c.amount > 0.0)
+
+        let evidenceTotal = sum (map (\e -> e.amount) evidences)
+        let fundedTotal = sum (map (\c -> c.amount) fundedCashes)
+        let totalPaid = evidenceTotal + fundedTotal
         assertMsg "Payment amount insufficient to satisfy payoff" (totalPaid >= payoffAmount)
 
         -- Consume each payment evidence once (archive it via ConsumeEvidence)
@@ -102,7 +162,7 @@ template PayoffQuote
         archive loanACid
         exercise collateralCid Repledge with
           newLocker  = newLocker
-          newContext = "LoanB-collateral-pending"
+          newContext = "repledge-pending"
 
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -138,65 +198,52 @@ template ReplacementOffer
       controller lenderB
       do return ()
 
-    -- Borrower exercises this INSIDE ClosingRequest.Execute.
-    -- Signatory lenderB + controller borrower authorize transferring agreed principal
-    -- to expectedRecipient ONLY while simultaneously securing and binding the repledged collateral.
-    -- Eliminates independent disbursement without collateral securing.
-    choice DisburseAndSecure : (ContractId PaymentEvidence, ContractId LoanB)
+    -- Disburse funding directly to expectedRecipient (Lender A).
+    -- Strict sub-transaction privacy: this choice transfers cash to expectedRecipient ONLY.
+    -- Payoff operations (PayoffQuote, SettleAndRepledge) are NOT nested under this choice,
+    -- ensuring Lender B never witnesses PayoffQuote or payoff operations in full transaction trees.
+    nonconsuming choice DisburseFunds : ContractId CashHolding
+      controller borrower
+      do
+        now <- getTime
+        assertMsg "ReplacementOffer has expired" (now < expiresAt)
+        cash <- fetch lenderBCashCid
+        assertMsg "Cash operator mismatch" (cash.operator == operator)
+        assertMsg "Cash instrument mismatch" (cash.instrument == cashInstrument)
+        assertMsg "Cash balance insufficient" (cash.amount >= newPrincipal)
+        assertMsg "Payer must own the cash" (cash.owner == lenderB)
+
+        (transferredCashCid, _change) <- if cash.amount == newPrincipal
+          then do
+            c <- exercise lenderBCashCid Transfer with recipient = expectedRecipient
+            return (c, None)
+          else do
+            (c, ch) <- exercise lenderBCashCid TransferPartial with
+              recipient      = expectedRecipient
+              transferAmount = newPrincipal
+            return (c, Some ch)
+
+        return transferredCashCid
+
+    -- Secure the repledged collateral and create Loan B.
+    -- Executed after SettleAndRepledge, ensuring sub-transaction privacy tree separation.
+    choice SecureLoan : ContractId LoanB
       with
-        payoffQuoteCid       : ContractId PayoffQuote
-        borrowerEvidenceCid  : ContractId PaymentEvidence
-        currentCollateralCid : ContractId LockedCollateralHolding
+        repledgedCollatCid : ContractId LockedCollateralHolding
       controller borrower
       do
         now <- getTime
         assertMsg "ReplacementOffer has expired" (now < expiresAt)
 
-        bCash <- fetch lenderBCashCid
-        assertMsg "Lender B cash insufficient" (bCash.amount >= newPrincipal)
-        assertMsg "Cash instrument mismatch" (bCash.instrument == cashInstrument)
-        assertMsg "Cash operator mismatch" (bCash.operator == operator)
-
-        quote <- fetch payoffQuoteCid
-        assertMsg "Quote recipient must match offer recipient" (quote.expectedRecipient == expectedRecipient)
-
-        -- 1. Transfer Lender B's funding to expected recipient (Lender A)
-        _cashForA <- if bCash.amount == newPrincipal
-          then exercise lenderBCashCid Transfer with
-            recipient = expectedRecipient
-          else do
-            (transferred, _change) <- exercise lenderBCashCid TransferPartial with
-              recipient      = expectedRecipient
-              transferAmount = newPrincipal
-            return transferred
-
-        -- 2. Issue PaymentEvidence from Lender B to Lender A bound to quote.loanACid
-        lenderBEvidenceCid <- create PaymentEvidence with
-          loanACid   = quote.loanACid
-          lenderA    = expectedRecipient
-          payer      = lenderB
-          borrower   = borrower
-          operator
-          instrument = cashInstrument
-          amount     = newPrincipal
-          settledAt  = now
-
-        -- 3. Settle PayoffQuote and re-pledge collateral to Lender B
-        repledgedCollatCid <- exercise payoffQuoteCid SettleAndRepledge with
-          newLocker           = lenderB
-          collateralCid       = currentCollateralCid
-          paymentEvidenceCids = [borrowerEvidenceCid, lenderBEvidenceCid]
-
         repledgedCollat <- fetch repledgedCollatCid
         assertMsg "Collateral amount must match offer" (repledgedCollat.amount == collateralUnits)
         assertMsg "Collateral instrument mismatch" (repledgedCollat.instrument == collateralInstrument)
+        assertMsg "Collateral locker must be lenderB" (repledgedCollat.locker == lenderB)
 
-        -- 4. Exclusively bind collateral to Loan B (produces non-rebindable BoundCollateralHolding)
         boundCollatCid <- exercise repledgedCollatCid BindToLoan with
           loanContext = "LoanB-collateral"
 
-        -- 5. Create Loan B
-        loanB <- create LoanB with
+        create LoanB with
           borrower
           lenderB
           operator
@@ -206,4 +253,21 @@ template ReplacementOffer
           capRate
           amortizationPeriods
 
-        return (lenderBEvidenceCid, loanB)
+    -- Legacy DisburseAndSecure choice for backward compatibility
+    choice DisburseAndSecure : (ContractId PaymentEvidence, ContractId LoanB)
+      with
+        payoffQuoteCid       : ContractId PayoffQuote
+        borrowerEvidenceCid  : ContractId PaymentEvidence
+        currentCollateralCid : ContractId LockedCollateralHolding
+      controller borrower
+      do
+        disbursedCashCid <- exercise self DisburseFunds
+
+        repledgedCollatCid <- exercise payoffQuoteCid SettleAndRepledge with
+          newLocker           = lenderB
+          collateralCid       = currentCollateralCid
+          paymentEvidenceCids = [borrowerEvidenceCid]
+          fundedCashCids      = [disbursedCashCid]
+
+        loanB <- exercise self SecureLoan with repledgedCollatCid
+        return (borrowerEvidenceCid, loanB)
