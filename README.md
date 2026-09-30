@@ -2,8 +2,8 @@
 > *Sub-Transaction Privacy & Atomic Collateral Repledging on Canton Network & Daml*
 
 [![CI](https://github.com/intelliDean/refcanton/actions/workflows/ci.yml/badge.svg)](https://github.com/intelliDean/refcanton/actions/workflows/ci.yml)
-[![Daml Tests](https://img.shields.io/badge/Daml%20Tests-21%20Passed%20(100%25)-brightgreen.svg)]()
-[![Backend Tests](https://img.shields.io/badge/Backend%20Tests-7%20Passed%20(100%25)-brightgreen.svg)]()
+[![Daml Tests](https://img.shields.io/badge/Daml%20Tests-22%20Passed%20(100%25)-brightgreen.svg)]()
+[![Backend Tests](https://img.shields.io/badge/Backend%20Tests-9%20Passed%20(100%25)-brightgreen.svg)]()
 [![Canton Evidence](https://img.shields.io/badge/Canton%20Evidence-Verified%20Update%20ID-blue.svg)](EVIDENCE.md)
 [![Daml SDK](https://img.shields.io/badge/Daml%20SDK-3.4.11-blue.svg)]()
 [![Canton](https://img.shields.io/badge/Canton-Network%20Enabled-blueviolet.svg)]()
@@ -135,9 +135,10 @@ Execute the Daml contract tests and backend security regression suite:
 ```bash
 npm test
 ```
-**Test Coverage Includes (21 Daml Tests + 7 Backend Security Tests):**
+**Test Coverage Includes (22 Daml Tests + 9 Backend Security Tests):**
 - **Smart Contract Security & Invariants**:
   - `testRefinancingLifecycle`: Complete happy-path atomic swap and balance verification.
+  - `testBorrowerCreatedZeroPaymentFails`: Rejects borrower attempts to unilaterally forge or issue payment proof with zero cash transfer; enforces dual signatures (`signatory lenderA, payer`), positive amounts (`amount > 0.0`), and genuine cash transfer through `PayTowardsQuote`.
   - `testUnauthorizedCollateralReleaseFails`: Rejects attempts to unlock collateral without lender authorization.
   - `testPaymentFreeReleaseFails`: Rejects collateral release through quotes if payment cash is omitted.
   - `testDuplicatePaymentCashFails`: Rejects attempts to duplicate payment cash contract IDs in settlement payments.
@@ -159,6 +160,8 @@ npm test
   - Rejection of forged `Bearer admin` backdoor and caller-selected `X-Party-Id` spoofing without HMAC-SHA256 signature.
   - HTTP 403 cross-party snooping rejection (e.g. Borrower accessing Lender A state, Lender A accessing Lender B).
   - Authenticated party-isolated transaction history filtering (zero competitor leak).
+  - Mandatory private deployment secrets with startup refusal: verifies required deployment secrets and refuses startup (exit 1) if secrets are missing or use default fallback keys.
+  - Fail-closed settlement verification without false success: executes exact requested contract ID, eliminates synthetic fallback IDs, and enforces ledger verification of Loan A archival and genuine receipt contract IDs (controlled mock with zero events returns HTTP 400).
   - HTTP 503 fail-closed rejection when Canton ledger nodes are offline.
   - HTTP 400 rejection of nonexistent closing requests (no synthetic fallback or false success).
 
@@ -167,7 +170,7 @@ With the cluster running, execute the end-to-end integration test through the HT
 ```bash
 ./scripts/test_live_api_closing.sh
 ```
-This tests genuine cryptographic authentication, quote issuance, offer commitment, genuine atomic closing submitted directly to Canton (`ClosingRequest.Execute`) returning a committed `updateId`, confirms the exact transaction on Canton, and queries Canton participant nodes directly (Participant 2 `:5024` for Lender A, Participant 3 `:5034` for Lender B) to verify that Lender A receives only the settlement of Loan A and Lender B receives only the funding of Loan B, while neither participant receives the other's private terms.
+This tests genuine cryptographic authentication, quote issuance, offer commitment, genuine atomic closing submitted directly to Canton (`ClosingRequest.Execute`) returning a committed `updateId`, confirms the exact transaction on Canton, and queries Canton participant nodes directly (Participant 2 `:5024` for Lender A, Participant 3 `:5034` for Lender B) and via the transaction tree API (`GET /api/transactions/:updateId/tree` using `TRANSACTION_SHAPE_LEDGER_EFFECTS`). It verifies that payoff operations (`PayTowardsQuote` and `SettleAndRepledge`) are executed as sibling choices under `ClosingRequest.Execute` rather than being nested under Lender B's choices, mathematically ensuring Lender B cannot witness Lender A's payoff even in nested sub-transaction trees.
 
 ### Step 5: Start the Application
 ```bash
@@ -275,6 +278,22 @@ docker compose ps
 # Teardown cluster
 docker compose down
 ```
+
+#### Required Deployment Secrets:
+In accordance with zero-trust security principles, hardcoded secrets are strictly forbidden. The application requires private deployment secrets passed as environment variables and fails fast on startup if missing or insecure:
+- `AUTH_SECRET`: HMAC-SHA256 signing secret for session tokens.
+- `BORROWER_SECRET`: Private credential for Borrower (Alice).
+- `LENDER_A_SECRET`: Private credential for Lender A (LegacyBank).
+- `LENDER_B_SECRET`: Private credential for Lender B (NeoCapital).
+- `OPERATOR_SECRET`: Private credential for Operator.
+
+When running `./scripts/run_docker.sh` or in CI, standardized test credentials are provided automatically if not already exported.
+
+### Continuous Integration (CI Pipeline)
+RefCanton uses a modular, discrete GitHub Actions CI pipeline ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) separating concerns into three specialized jobs:
+1. **`Daml Smart Contracts`** (`daml-contracts`): Compiles the DAR package, executes all 22 Daml integration and negative security tests (unbacked evidence rejection, collateral locking, anti-replay), and uploads the compiled DAR artifact.
+2. **`Backend Security & Access Control`** (`backend-security`): Executes in parallel with the Daml job; compiles TypeScript and executes all 9 security regression tests (HMAC token verification, timing attack resistance, cross-party snooping rejection, offline fail-closed, and startup secret validation).
+3. **`Live Canton E2E & Privacy Audit`** (`canton-e2e`): Depends on the successful completion of both Daml and Backend jobs; boots the full containerized multi-participant Canton cluster and executes [`./scripts/test_live_api_closing.sh`](scripts/test_live_api_closing.sh), verifying end-to-end atomic settlement and full transaction tree isolation (`TRANSACTION_SHAPE_LEDGER_EFFECTS`).
 
 ### Manual Host Deployment
 If running Canton directly on your host machine:
